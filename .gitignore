@@ -10,3 +10,12 @@
 SDL2.dll
 /sm.exe
 /glsl-shaders/
+
+# Android
+android/local.properties
+android/.gradle/
+android/.idea/
+android/*.iml
+android/app/.cxx/
+android/app/build/
+android/build/

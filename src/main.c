@@ -25,6 +25,11 @@
 #ifdef __SWITCH__
 #include "switch_impl.h"
 #endif
+#ifdef __ANDROID__
+#include <android/log.h>
+#include "platform/android/android_impl.h"
+#endif
+#include "second_screen.h"
 
 static void playAudio(Snes *snes, SDL_AudioDeviceID device, int16_t *audioBuffer);
 static void renderScreen(Snes *snes, SDL_Renderer *renderer, SDL_Texture *texture);
@@ -311,7 +316,14 @@ static const struct RendererFuncs kSdlRendererFuncs = {
 
 
 
+// SDL_main.h redefines main -> SDL_main on most platforms; this app wants a
+// literal `main` symbol (e.g. built as a plain console app on Windows), so it
+// undoes that everywhere except Android, where SDLActivity's Java side
+// dlsym()s for "SDL_main" specifically and calling it as plain `main` would
+// fail to load.
+#ifndef __ANDROID__
 #undef main
+#endif
 int main(int argc, char** argv) {
 #ifdef __SWITCH__
   SwitchImpl_Init();
@@ -367,15 +379,28 @@ int main(int argc, char** argv) {
   int window_width = custom_size ? g_config.window_width : g_current_window_scale * g_snes_width;
   int window_height = custom_size ? g_config.window_height : g_current_window_scale * g_snes_height;
 
+#ifdef __ANDROID__
+  // The desktop GL3-core-profile renderer (opengl.c) isn't GLES-portable and
+  // isn't even compiled into the Android build; always use the SDL_Renderer
+  // backend there regardless of what the config file says.
+  g_renderer_funcs = kSdlRendererFuncs;
+#else
   if (g_config.output_method == kOutputMethod_OpenGL) {
     g_win_flags |= SDL_WINDOW_OPENGL;
     OpenGLRenderer_Create(&g_renderer_funcs);
   } else {
     g_renderer_funcs = kSdlRendererFuncs;
   }
+#endif
 
   // init snes, load rom
+#ifdef __ANDROID__
+  // argv is empty/meaningless under SDL's Android activity; the ROM lives
+  // where the Java SetupActivity copied it, in app-external storage.
+  const char *filename = AndroidImpl_GetRomPath();
+#else
   const char* filename = argv[0] ? argv[0] : "sm.smc";
+#endif
   Snes *snes = SnesInit(filename);
 
   if(snes == NULL) {
@@ -510,6 +535,19 @@ int main(int argc, char** argv) {
     uint8 is_replay = RtlRunFrame(inputs);
 
     frameCtr++;
+#ifdef __ANDROID__
+    // Temporary Phase 1 verification: dump SM2_* state to logcat once a
+    // second so it can be checked against real gameplay before the JNI
+    // bridge (Phase 2) exists to read it from Java. Remove once that lands.
+    if (frameCtr % 60 == 0) {
+      __android_log_print(ANDROID_LOG_INFO, "SM2DEBUG",
+          "pos=(%d,%d) area=%d room=%d hasMap=%d hp=%d/%d missiles=%d/%d supers=%d/%d pbs=%d/%d items=0x%04x beams=0x%04x",
+          SM2_GetSamusX(), SM2_GetSamusY(), SM2_GetArea(), SM2_GetRoom(), SM2_HasAreaMap(),
+          SM2_GetHealth(), SM2_GetMaxHealth(), SM2_GetMissiles(), SM2_GetMaxMissiles(),
+          SM2_GetSuperMissiles(), SM2_GetMaxSuperMissiles(), SM2_GetPowerBombs(), SM2_GetMaxPowerBombs(),
+          SM2_GetEquippedItems(), SM2_GetEquippedBeams());
+    }
+#endif
     g_snes->disableRender = (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0;
 
     if (!g_snes->disableRender)
@@ -704,8 +742,17 @@ static void OpenOneGamepad(int i) {
 
 static int RemapSdlButton(int button) {
   switch (button) {
+#ifdef __ANDROID__
+  // SDL's A/B are Xbox-position semantics (A=bottom, B=right); the Thor's
+  // face buttons are Nintendo-position (A=right, B=bottom), and it's not in
+  // SDL's controller database yet, so Android's generic auto-mapping labels
+  // them backwards from what's printed on the device. Swap them back here.
+  case SDL_CONTROLLER_BUTTON_A: return kGamepadBtn_B;
+  case SDL_CONTROLLER_BUTTON_B: return kGamepadBtn_A;
+#else
   case SDL_CONTROLLER_BUTTON_A: return kGamepadBtn_A;
   case SDL_CONTROLLER_BUTTON_B: return kGamepadBtn_B;
+#endif
   case SDL_CONTROLLER_BUTTON_X: return kGamepadBtn_X;
   case SDL_CONTROLLER_BUTTON_Y: return kGamepadBtn_Y;
   case SDL_CONTROLLER_BUTTON_BACK: return kGamepadBtn_Back;

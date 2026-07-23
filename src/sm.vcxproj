@@ -152,6 +152,7 @@
     <ClCompile Include="main.c" />
     <ClCompile Include="opengl.c" />
     <ClCompile Include="platform\win32\volume_control.c" />
+    <ClCompile Include="second_screen.c" />
     <ClCompile Include="sm_80.c" />
     <ClCompile Include="sm_81.c" />
     <ClCompile Include="sm_82.c" />
@@ -251,6 +252,7 @@
     <ClInclude Include="snes\saveload.h" />
     <ClInclude Include="snes\snes.h" />
     <ClInclude Include="snes\spc.h" />
+    <ClInclude Include="second_screen.h" />
     <ClInclude Include="spc_player.h" />
     <ClInclude Include="tracing.h" />
     <ClInclude Include="types.h" />
