@@ -28,11 +28,35 @@
 #define kEquipmentTilemaps_Boots ((const uint16 *)RomFixedPtr(0x82c0a2))
 #define kEquipIconTiles 8  // output width in tiles; weapons only use 4 and leave the rest transparent
 
+// The elevator/room-select screen's per-area name label (see
+// DrawRoomSelectMapAreaLabel and its kPauseAreaLabelTilemap[area_index] use
+// in sm_82.c, which redefines this same address locally too): an array of 8
+// bank-0x82 offsets, one per area, each pointing to a 12-entry tilemap strip
+// (12 tiles x 1 tile = 96x8px) drawn from the same kMapTileGfx/
+// kPauseScreenPalettes bank as the map and equipment icons.
+#define kPauseAreaLabelTilemap ((const uint16 *)RomFixedPtr(0x82965f))
+#define kAreaLabelTiles 12
+
 int SM2_GetSamusX(void) { return samus_x_pos; }
 int SM2_GetSamusY(void) { return samus_y_pos; }
 int SM2_GetArea(void) { return area_index; }
 int SM2_GetRoom(void) { return room_index; }
 bool SM2_HasAreaMap(void) { return has_area_map != 0; }
+
+int SM2_GetGameState(void) { return game_state; }
+
+bool SM2_IsPlayingLive(void) {
+  // 7 = fade-in into gameplay, 8 = main gameplay, 9..0xB = the brief
+  // hit-door-block/loading-next-room blip - see the GameState enum in
+  // ida_types.h. Everything else is a menu, pause, cutscene, death sequence,
+  // or demo attract-mode.
+  switch (game_state) {
+    case 7: case 8: case 9: case 0xA: case 0xB:
+      return true;
+    default:
+      return false;
+  }
+}
 
 void SM2_GetRoomMapRect(int *out) {
   out[0] = room_x_coordinate_on_map;
@@ -189,6 +213,35 @@ bool SM2_RenderBeamIcon(int bit, uint32 *out) {
     }
   }
   return false;
+}
+
+bool SM2_RenderAreaLabel(int area, uint32 *out) {
+  if (!g_rom) return false;
+  if (area < 0 || area > 7) return false;
+
+  memset(out, 0, sizeof(uint32) * kAreaLabelTiles * 8 * 8);
+  const uint16 *entries = (const uint16 *)RomPtr_82(kPauseAreaLabelTilemap[area]);
+  for (int t = 0; t < kAreaLabelTiles; t++) {
+    uint16 entry = entries[t] & 0xEFFF;  // matches DrawRoomSelectMapAreaLabel's masking
+    int tile_index = entry & 0x3FF;
+    int palette_row = (entry >> 10) & 7;
+    bool flip_x = (entry & 0x4000) != 0;
+    bool flip_y = (entry & 0x8000) != 0;
+    if (tile_index >= kMapTileCount) continue;
+
+    const uint8 *tile = kMapTileGfx + tile_index * 32;
+    for (int py = 0; py < 8; py++) {
+      int sy = flip_y ? 7 - py : py;
+      for (int px = 0; px < 8; px++) {
+        int sx = flip_x ? 7 - px : px;
+        int ci = Snes4bppColorIndex(tile, sx, sy);
+        if (ci == 0) continue;  // palette index 0 = transparent, matching the equipment icon strips
+        uint16 color15 = kPauseScreenPalettes[palette_row * 16 + ci];
+        out[py * (kAreaLabelTiles * 8) + t * 8 + px] = Snes15ToArgb(color15);
+      }
+    }
+  }
+  return true;
 }
 
 bool SM2_RenderAreaMap(int area, uint32 *out) {

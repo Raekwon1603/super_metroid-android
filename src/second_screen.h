@@ -20,6 +20,25 @@ bool SM2_HasAreaMap(void);
 // placement within its area's map grid.
 void SM2_GetRoomMapRect(int *out);
 
+// ---- game mode ----
+// Raw game_state value (g_ram+0x998) - see the GameState enum in
+// ida_types.h for the full state list (menus, cinematics, pause, demo, etc).
+int SM2_GetGameState(void);
+// True while the live map is meaningful to show: normal gameplay and its
+// brief door/room-load transitions. False for anything else (title/file
+// select, pause menu, death sequence, cutscenes, demo attract-mode) - those
+// already have their own thing on the main display, so the second screen
+// should dim rather than show a stale/irrelevant map.
+bool SM2_IsPlayingLive(void);
+
+// Renders the real in-game area-name label graphic - the same 12-tile-wide
+// strip DrawRoomSelectMapAreaLabel (sm_82.c) draws on the elevator/room-select
+// screen - for the given area index into a 96x8 ARGB8888 buffer (out must be
+// 96*8 = 768 uint32s), decoded from the same ROM tile/palette data the map
+// itself uses. Background and each tile's own palette index 0 are left
+// transparent. Returns false if the ROM isn't loaded yet.
+bool SM2_RenderAreaLabel(int area, uint32 *out);
+
 // ---- map explore state ----
 // Copies the live per-area explored-tile bitmap (map_tiles_explored,
 // g_ram+0x7F7, 256 bytes) into out; n is clamped to 256.

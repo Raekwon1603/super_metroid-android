@@ -13,6 +13,12 @@ public class GameState {
     public static native int getRoom();
     public static native boolean hasAreaMap();
 
+    // Raw game_state value - see the GameState enum in ida_types.h.
+    public static native int getGameState();
+    // True during normal gameplay (and its brief door/room-load blips),
+    // false during menus, pause, cutscenes, death, or demo attract-mode.
+    public static native boolean isPlayingLive();
+
     // out must be length >= 4: {roomX, roomY, roomWidthBlocks, roomHeightBlocks}
     public static native boolean getRoomMapRect(int[] out);
 
@@ -36,6 +42,10 @@ public class GameState {
     // no equipment-screen icon in vanilla SM.
     public static native boolean renderItemIcon(int bit, int[] out);
     public static native boolean renderBeamIcon(int bit, int[] out);
+
+    // Renders the real in-game area-name label graphic (12 tiles x 1 tile =
+    // 96x8px) for the given area index. out must be length >= 96*8.
+    public static native boolean renderAreaLabel(int area, int[] out);
 
     // Renders the actual gameplay-HUD missile icon into a 24x16 ARGB8888
     // buffer (out must be length >= 24*16).

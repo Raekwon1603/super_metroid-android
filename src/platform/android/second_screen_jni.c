@@ -34,6 +34,16 @@ JNIEXPORT jboolean JNICALL JFN(hasAreaMap)(JNIEnv *env, jclass clazz) {
   return SM2_HasAreaMap() ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL JFN(getGameState)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_GetGameState();
+}
+
+JNIEXPORT jboolean JNICALL JFN(isPlayingLive)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_IsPlayingLive() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL JFN(getRoomMapRect)(JNIEnv *env, jclass clazz, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 4) return JNI_FALSE;
@@ -81,6 +91,15 @@ JNIEXPORT jboolean JNICALL JFN(renderAreaMap)(JNIEnv *env, jclass clazz, jint ar
   if (!out || (*env)->GetArrayLength(env, out) < 512 * 256) return JNI_FALSE;
   if (!SM2_RenderAreaMap(area, g_map_px)) return JNI_FALSE;
   (*env)->SetIntArrayRegion(env, out, 0, 512 * 256, (jint *)g_map_px);
+  return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(renderAreaLabel)(JNIEnv *env, jclass clazz, jint area, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 96 * 8) return JNI_FALSE;
+  uint32 px[96 * 8];
+  if (!SM2_RenderAreaLabel(area, px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 96 * 8, (jint *)px);
   return JNI_TRUE;
 }
 
