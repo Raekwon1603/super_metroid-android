@@ -31,6 +31,8 @@ public class SetupActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        installDefaultIniIfMissing();
+
         if (romFile().length() > 0) {
             launchGame();
             return;
@@ -65,6 +67,25 @@ public class SetupActivity extends Activity {
 
     private File romFile() {
         return new File(getExternalFilesDir(null), "sm.smc");
+    }
+
+    // main.c's ParseConfigFile() looks for sm.ini relative to cwd, which
+    // AndroidImpl_Init() chdir()s to this same external-files directory.
+    // Only installs it once - never overwrites a user's own customized ini.
+    private void installDefaultIniIfMissing() {
+        File dest = new File(getExternalFilesDir(null), "sm.ini");
+        if (dest.exists()) return;
+        try (InputStream in = getAssets().open("sm.ini");
+             OutputStream out = new FileOutputStream(dest)) {
+            byte[] buf = new byte[8 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+        } catch (Exception e) {
+            // Non-fatal - the engine falls back to hardcoded defaults if sm.ini
+            // is missing, it just won't have a gamepad quicksave/load binding.
+        }
     }
 
     @Override

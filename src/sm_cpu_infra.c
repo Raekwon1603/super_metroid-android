@@ -14,7 +14,18 @@
 void RtlRunFrameCompare(uint16 input, int run_what);
 
 enum RunMode { RM_BOTH, RM_MINE, RM_THEIRS };
+#ifdef __ANDROID__
+// RM_BOTH runs the frame through both the original CPU-emulated interpreter
+// and the decompiled C logic and compares them, falling back to the
+// emulated version for a frame on mismatch before resuming dual-mode - a
+// decomp-development correctness check, not something a player needs. That
+// fallback/resume can leave a multi-frame coroutine (e.g. a door transition)
+// desynced between the two implementations, which is what caused the freeze
+// entering Zebes. Just run the decompiled path on Android.
+uint8 g_runmode = RM_MINE;
+#else
 uint8 g_runmode = RM_BOTH;
+#endif
 
 extern int g_got_mismatch_count;
 
