@@ -1,6 +1,15 @@
 #include <SDL.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "android_impl.h"
+
+void AndroidImpl_Init(void) {
+  const char *dir = SDL_AndroidGetExternalStoragePath();
+  if (!dir) return;
+  chdir(dir);
+  mkdir("saves", 0777);
+}
 
 const char *AndroidImpl_GetRomPath(void) {
   static char path[1024];

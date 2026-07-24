@@ -328,6 +328,9 @@ int main(int argc, char** argv) {
 #ifdef __SWITCH__
   SwitchImpl_Init();
 #endif
+#ifdef __ANDROID__
+  AndroidImpl_Init();
+#endif
   argc--, argv++;
   const char *config_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--config") == 0) {
