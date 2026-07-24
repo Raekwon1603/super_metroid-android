@@ -70,16 +70,23 @@ void SM2_ReadExploredTiles(uint8 *out, int n) {
   memcpy(out, map_tiles_explored, n);
 }
 
-void SM2_DecodeExploredGrid(uint8 *out) {
+// map_tiles_explored's packed bit layout, generalized to any 256-byte
+// explored-bits source - shared by SM2_DecodeExploredGrid (the live current
+// area) and SM2_RenderAreaMap's other-area path (explored_map_tiles_saved).
+static void DecodeExploredGridFrom(const uint8 *bits, uint8 *out) {
   for (int y = 0; y < 32; y++) {
     for (int x = 0; x < 64; x++) {
       int half = x >> 5;
       int col = (x >> 3) & 3;
       int byte_index = col + half * 128 + 4 * y;
       uint8 bit = 0x80 >> (x & 7);
-      out[y * 64 + x] = (map_tiles_explored[byte_index] & bit) ? 1 : 0;
+      out[y * 64 + x] = (bits[byte_index] & bit) ? 1 : 0;
     }
   }
+}
+
+void SM2_DecodeExploredGrid(uint8 *out) {
+  DecodeExploredGridFrom(map_tiles_explored, out);
 }
 
 void SM2_GetSamusMapTile(int *out_x, int *out_y) {
@@ -244,19 +251,54 @@ bool SM2_RenderAreaLabel(int area, uint32 *out) {
   return true;
 }
 
+// Matches LoadPauseMenuMapTilemap's `!sign16(area_index - 7)` check (true
+// for area_index >= 7): area 6 is Ceres, which has its own real tilemap
+// entry (see MapIconDataPointers in ida_types.h: ceres is index 6, a
+// distinct field from crateria at index 0) - only area 7 (the unused
+// "debug" entry, never reached in normal play) falls back to Crateria's data.
+static int RemapArea(int area) { return (area >= 7) ? 0 : area; }
+
+// For the currently-loaded area, use the live in-RAM explored bits (freshest,
+// may be ahead of the last area-transition/save sync). For any other area -
+// used by the second screen's zoomed-out multi-area world view - fall back
+// to explored_map_tiles_saved, which LoadMirrorOfExploredMapTiles/
+// SaveExploredMapTilesToSaved (sm_80.c) keep synced per-area on every area
+// transition, not just at save stations.
+static void GetExploredGridForArea(int remapped_area, uint8 *out) {
+  if (remapped_area == area_index) {
+    DecodeExploredGridFrom(map_tiles_explored, out);
+  } else {
+    DecodeExploredGridFrom((const uint8 *)explored_map_tiles_saved + remapped_area * 256, out);
+  }
+}
+
+// Whether the player has actually explored any part of the given area (any
+// area, not just the currently-loaded one) - used by the second screen's
+// world view to hide areas nothing has been revealed in yet, rather than
+// showing an empty area's tile grid as if it were "on the map".
+bool SM2_AreaHasAnyExploredTile(int area) {
+  if (!g_rom) return false;
+  if (area < 0 || area > 7) return false;
+  uint8 explored[kMapGridW * kMapGridH];
+  GetExploredGridForArea(RemapArea(area), explored);
+  for (int i = 0; i < kMapGridW * kMapGridH; i++)
+    if (explored[i]) return true;
+  return false;
+}
+
 bool SM2_RenderAreaMap(int area, uint32 *out) {
   if (!g_rom) return false;  // ROM not loaded yet - see the header comment.
 
   if (area < 0 || area > 7) return false;
 
   static const uint32 kUnexploredColor = 0xFF14141Eu;
-  int remapped_area = (area == 7) ? 0 : area;  // Ceres shares Crateria's map data, matching LoadPauseMenuMapTilemap.
+  int remapped_area = RemapArea(area);
   const uint16 *tilemap = (const uint16 *)RomPtr(Load24(&kPauseMenuMapTilemaps[remapped_area]));
   const uint8 *gfx = kMapTileGfx;
   const uint16 *pal = kPauseScreenPalettes;
 
   uint8 explored[kMapGridW * kMapGridH];
-  SM2_DecodeExploredGrid(explored);
+  GetExploredGridForArea(remapped_area, explored);
 
   for (int ty = 0; ty < kMapGridH; ty++) {
     for (int tx = 0; tx < kMapGridW; tx++) {

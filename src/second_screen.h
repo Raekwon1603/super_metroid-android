@@ -53,16 +53,27 @@ void SM2_DecodeExploredGrid(uint8 *out);
 // same coordinate space as SM2_DecodeExploredGrid and SM2_GetRoomMapRect.
 void SM2_GetSamusMapTile(int *out_x, int *out_y);
 
+// Whether the player has explored any tile at all in the given area (0-7,
+// not just the currently-loaded one) - true real exploration progress, not
+// map-station ownership (LoadPauseMenuMapTilemap's own gate, which most
+// players won't have for every area they've walked through). Used by the
+// second screen's world view to hide areas nothing's been revealed in yet.
+bool SM2_AreaHasAnyExploredTile(int area);
+
 // Renders the given area's map into a 512x256 ARGB8888 buffer (64x32 tiles
 // at 8x8px each, matching SM2_DecodeExploredGrid's grid), decoding the same
 // SNES 4bpp tile graphics/palette the in-game pause-menu map screen uses
 // (see LoadPauseMenuMapTilemap in sm_82.c) rather than a schematic
 // placeholder. Unexplored tiles are left a flat dark color instead of
-// decoded. out must be 512*256 uint32s (0xAARRGGBB per pixel, i.e. Android
-// Bitmap.setPixels()'s native int format). Returns false (leaving out
-// untouched) if the ROM isn't loaded yet - g_rom is NULL until SnesInit()
-// finishes on the native game thread, which can race behind a second-screen
-// view that starts drawing immediately on activity start.
+// decoded. Can be called for any area (0-7), not just the currently-loaded
+// one - the current area's explored bits come from the live in-RAM copy,
+// other areas' from explored_map_tiles_saved (kept in sync per-area on every
+// area transition), so a caller can render a multi-area "world view" of
+// everywhere explored so far. out must be 512*256 uint32s (0xAARRGGBB per
+// pixel, i.e. Android Bitmap.setPixels()'s native int format). Returns false
+// (leaving out untouched) if the ROM isn't loaded yet - g_rom is NULL until
+// SnesInit() finishes on the native game thread, which can race behind a
+// second-screen view that starts drawing immediately on activity start.
 bool SM2_RenderAreaMap(int area, uint32 *out);
 
 // Renders the real in-game equipment-screen icon for the given item/beam

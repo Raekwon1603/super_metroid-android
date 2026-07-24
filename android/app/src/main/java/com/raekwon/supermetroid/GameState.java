@@ -12,6 +12,9 @@ public class GameState {
     public static native int getArea();
     public static native int getRoom();
     public static native boolean hasAreaMap();
+    // True if the player has explored any tile at all in the given area
+    // (0-7), not just the currently-loaded one.
+    public static native boolean areaHasAnyExploredTile(int area);
 
     // Raw game_state value - see the GameState enum in ida_types.h.
     public static native int getGameState();

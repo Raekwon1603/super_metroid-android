@@ -34,6 +34,11 @@ JNIEXPORT jboolean JNICALL JFN(hasAreaMap)(JNIEnv *env, jclass clazz) {
   return SM2_HasAreaMap() ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(areaHasAnyExploredTile)(JNIEnv *env, jclass clazz, jint area) {
+  (void)env; (void)clazz;
+  return SM2_AreaHasAnyExploredTile(area) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL JFN(getGameState)(JNIEnv *env, jclass clazz) {
   (void)env; (void)clazz;
   return SM2_GetGameState();
