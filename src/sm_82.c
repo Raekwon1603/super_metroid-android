@@ -683,6 +683,17 @@ CoroutineRet RunOneFrameOfGameInner(void) {
 
   coroutine_state_0 = st = game_state + 10;
 RESUME_AT_SWITCH:
+  if (st - 10 < 0 || st - 10 >= (int)countof(kGameStateFuncs)) {
+    // game_state/coroutine_state_0 somehow ended up pointing past
+    // kGameStateFuncs (45 entries) - calling through it would be a NULL/OOB
+    // function-pointer call. Reset to game state 0 (title/reset) rather
+    // than crash; this is a fallback for a state we haven't root-caused,
+    // not expected during normal play.
+    printf("Invalid game state dispatch index %d (game_state=%d) - resetting\n", st - 10, game_state);
+    coroutine_state_0 = 0;
+    game_state = 0;
+    return kCoroutineNone;
+  }
   COROUTINE_AWAIT_ONLY(kGameStateFuncs[st - 10]());
 
   HandleSoundEffects();
@@ -1911,7 +1922,6 @@ void LoadEquipmentScreenEquipmentTilemaps(void) {  // 0x82A12B
     }
   }
 }
-
 
 void ClearSamusBeamTiles(void) {  // 0x82A2BE
   WriteReg(VMADDL, 0);

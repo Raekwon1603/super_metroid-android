@@ -25,6 +25,44 @@ void SM2_GetRoomMapRect(int *out);
 // g_ram+0x7F7, 256 bytes) into out; n is clamped to 256.
 void SM2_ReadExploredTiles(uint8 *out, int n);
 
+// Decodes map_tiles_explored's packed bit layout (reverse-derived from
+// MarkMapTileAsExplored in sm_90.c) into a plain 64x32 grid, one byte (0/1)
+// per map tile, row-major (out[y*64+x]). out must be 64*32 = 2048 bytes.
+void SM2_DecodeExploredGrid(uint8 *out);
+
+// Absolute map-tile coordinates (0..63, 0..31) of Samus's current position,
+// same coordinate space as SM2_DecodeExploredGrid and SM2_GetRoomMapRect.
+void SM2_GetSamusMapTile(int *out_x, int *out_y);
+
+// Renders the given area's map into a 512x256 ARGB8888 buffer (64x32 tiles
+// at 8x8px each, matching SM2_DecodeExploredGrid's grid), decoding the same
+// SNES 4bpp tile graphics/palette the in-game pause-menu map screen uses
+// (see LoadPauseMenuMapTilemap in sm_82.c) rather than a schematic
+// placeholder. Unexplored tiles are left a flat dark color instead of
+// decoded. out must be 512*256 uint32s (0xAARRGGBB per pixel, i.e. Android
+// Bitmap.setPixels()'s native int format). Returns false (leaving out
+// untouched) if the ROM isn't loaded yet - g_rom is NULL until SnesInit()
+// finishes on the native game thread, which can race behind a second-screen
+// view that starts drawing immediately on activity start.
+bool SM2_RenderAreaMap(int area, uint32 *out);
+
+// Renders the real in-game equipment-screen icon for the given item/beam
+// bit into a 64x8 ARGB8888 strip (out must be 64*8 = 512 uint32s), decoded
+// from the same ROM tile/palette data the pause menu's equipment screen
+// itself uses. Unused space and each tile's own palette index 0 are left
+// transparent. Returns false if the ROM isn't loaded yet, or for the two
+// items with no equipment-screen icon in vanilla SM (Grapple, X-Ray).
+bool SM2_RenderItemIcon(int bit, uint32 *out);
+bool SM2_RenderBeamIcon(int bit, uint32 *out);
+
+// Renders the actual gameplay-HUD missile icon (the small tank glyph shown
+// next to the ammo count during normal play - kHudTilemaps_Missiles in
+// sm_80.c) into a 24x16 ARGB8888 buffer (out must be 24*16 = 384 uint32s).
+// Unlike the equipment-screen data, this tilemap is a literal array in the
+// decompiled C source, not ROM-only data. Returns false if the ROM isn't
+// loaded yet.
+bool SM2_RenderMissileIcon(uint32 *out);
+
 // ---- items (equipped_items / collected_items bitfields, g_ram+0x9A2/0x9A4) ----
 // Bit values reverse-derived from this decomp's own usage (palette/pose
 // selection, PLM pickup handlers, HUD icon code) - see second_screen.c.

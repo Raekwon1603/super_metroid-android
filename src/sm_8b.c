@@ -6390,6 +6390,14 @@ void CallMode7PreInstr(uint32 ea, uint16 k) {
   case fnCinematicFunction_Intro_Func24: CinematicFunction_Intro_Func24(k); return;
   case fnCinematicFunction_Intro_Func27: CinematicFunction_Intro_Func27(k); return;
   case fnCinematicFunction_Intro_Func30: CinematicFunction_Intro_Func30(k); return;
-  default: Unreachable();
+  default:
+    // Not implemented in this decompile snapshot - Unreachable() would
+    // hard-abort here (its assert(0) isn't platform-gated), which blocked
+    // starting a new game entirely since the opening cinematic's Mode 7
+    // objects always hit this. Treat as a no-op instead: whatever this one
+    // Mode 7 object's pre-instruction was supposed to do gets skipped for
+    // that instruction, rather than crashing the whole game.
+    printf("CallMode7PreInstr: unimplemented ea=0x%x, skipping\n", ea);
+    return;
   }
 }

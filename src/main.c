@@ -26,10 +26,8 @@
 #include "switch_impl.h"
 #endif
 #ifdef __ANDROID__
-#include <android/log.h>
 #include "platform/android/android_impl.h"
 #endif
-#include "second_screen.h"
 
 static void playAudio(Snes *snes, SDL_AudioDeviceID device, int16_t *audioBuffer);
 static void renderScreen(Snes *snes, SDL_Renderer *renderer, SDL_Texture *texture);
@@ -538,19 +536,6 @@ int main(int argc, char** argv) {
     uint8 is_replay = RtlRunFrame(inputs);
 
     frameCtr++;
-#ifdef __ANDROID__
-    // Temporary Phase 1 verification: dump SM2_* state to logcat once a
-    // second so it can be checked against real gameplay before the JNI
-    // bridge (Phase 2) exists to read it from Java. Remove once that lands.
-    if (frameCtr % 60 == 0) {
-      __android_log_print(ANDROID_LOG_INFO, "SM2DEBUG",
-          "pos=(%d,%d) area=%d room=%d hasMap=%d hp=%d/%d missiles=%d/%d supers=%d/%d pbs=%d/%d items=0x%04x beams=0x%04x",
-          SM2_GetSamusX(), SM2_GetSamusY(), SM2_GetArea(), SM2_GetRoom(), SM2_HasAreaMap(),
-          SM2_GetHealth(), SM2_GetMaxHealth(), SM2_GetMissiles(), SM2_GetMaxMissiles(),
-          SM2_GetSuperMissiles(), SM2_GetMaxSuperMissiles(), SM2_GetPowerBombs(), SM2_GetMaxPowerBombs(),
-          SM2_GetEquippedItems(), SM2_GetEquippedBeams());
-    }
-#endif
     g_snes->disableRender = (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0;
 
     if (!g_snes->disableRender)
