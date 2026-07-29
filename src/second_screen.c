@@ -286,6 +286,13 @@ bool SM2_AreaHasAnyExploredTile(int area) {
   return false;
 }
 
+bool SM2_DecodeExploredGridForArea(int area, uint8 *out) {
+  if (!g_rom) return false;
+  if (area < 0 || area > 7) return false;
+  GetExploredGridForArea(RemapArea(area), out);
+  return true;
+}
+
 bool SM2_RenderAreaMap(int area, uint32 *out) {
   if (!g_rom) return false;  // ROM not loaded yet - see the header comment.
 

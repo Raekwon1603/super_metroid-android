@@ -31,6 +31,11 @@ public class GameState {
     // out must be length >= 64*32: one byte (0/1) per map tile, row-major.
     public static native boolean decodeExploredGrid(byte[] out);
 
+    // Same as decodeExploredGrid, but for any area (0-7), not just the
+    // currently-loaded one - used by the world view to crop each area down
+    // to its own actually-explored extent. out must be length >= 64*32.
+    public static native boolean decodeExploredGridForArea(int area, byte[] out);
+
     // out must be length >= 2: {tileX, tileY}, same space as decodeExploredGrid.
     public static native boolean getSamusMapTile(int[] out);
 

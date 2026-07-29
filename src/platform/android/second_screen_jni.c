@@ -78,6 +78,15 @@ JNIEXPORT jboolean JNICALL JFN(decodeExploredGrid)(JNIEnv *env, jclass clazz, jb
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(decodeExploredGridForArea)(JNIEnv *env, jclass clazz, jint area, jbyteArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 64 * 32) return JNI_FALSE;
+  uint8 tmp[64 * 32];
+  if (!SM2_DecodeExploredGridForArea(area, tmp)) return JNI_FALSE;
+  (*env)->SetByteArrayRegion(env, out, 0, 64 * 32, (jbyte *)tmp);
+  return JNI_TRUE;
+}
+
 JNIEXPORT jboolean JNICALL JFN(getSamusMapTile)(JNIEnv *env, jclass clazz, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 2) return JNI_FALSE;

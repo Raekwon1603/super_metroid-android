@@ -39,16 +39,37 @@ public class MapStatusView extends View {
     private static final int LABEL_PX_W = 96, LABEL_PX_H = 8;
     private static final int REFRESH_INTERVAL = 20;
 
-    // zoomFactor 1 = whole 64x32 area visible, filling the screen just like
-    // the in-game pause map does - that's the default. Higher = fewer tiles
-    // visible, each drawn bigger, for zooming in on the room Samus is in;
-    // pinch, double-tap-to-reset, or the on-screen +/- buttons all adjust it.
+    // zoomFactor 1 = the auto-fit view (see autoFit* fields below) is shown
+    // as-is, filling the screen with just the explored rooms' extent rather
+    // than the whole mostly-unexplored 64x32 grid - so early-game a couple
+    // of rooms fill the panel instead of sitting as a speck in a giant black
+    // void. Higher = fewer tiles visible within that same auto-fit region,
+    // each drawn bigger, for zooming in on the room Samus is in; pinch,
+    // double-tap-to-reset, or the on-screen +/- buttons all adjust it.
     // Zooming out past MIN_ZOOM instead flips into worldView (see below).
     private static final float MIN_ZOOM = 1f;
     private static final float MAX_ZOOM = 6f;
     private static final float DEFAULT_ZOOM = MIN_ZOOM;
     private static final float ZOOM_BUTTON_STEP = 1.4f;
     private float zoomFactor = DEFAULT_ZOOM;
+
+    // Explored-tile bounding box for the current area (in tile units, half-
+    // open [min,max)), recomputed whenever the explored grid is refreshed.
+    // Drives the auto-fit baseline in drawMap so the default view frames
+    // just the rooms actually revealed so far instead of the full grid.
+    // Starts as "nothing explored" so the very first frame (before any
+    // native call has run) falls back to the whole-grid behavior.
+    private final byte[] exploredGrid = new byte[GRID_W * GRID_H];
+    private int exploredMinX = 0, exploredMinY = 0, exploredMaxX = GRID_W, exploredMaxY = GRID_H;
+
+    // Minimum auto-fit extent, in tiles, so a single freshly-revealed room
+    // doesn't zoom in so far that its own art looks blocky/oversized - keeps
+    // a reasonable amount of surrounding (unexplored) context visible.
+    private static final float MIN_AUTOFIT_TILES_W = 16f;
+    private static final float MIN_AUTOFIT_TILES_H = 10f;
+    // Margin added around the explored bbox, as a fraction of its own size,
+    // so revealed rooms don't touch the screen edge.
+    private static final float AUTOFIT_MARGIN_FRAC = 0.25f;
 
     // Zoomed all the way out: all 6 named areas composited into one shared
     // canvas at their real relative positions - a single connected map, not
@@ -68,27 +89,46 @@ public class MapStatusView extends View {
     // fill the screen early on instead of sitting tiny in a mostly-black
     // canvas sized for all six.
     //
-    // These aren't guessed: derived by walking this ROM's actual room/door
-    // graph (RoomDefHeader.area_index_/x_coordinate_on_map/
-    // y_coordinate_on_map and each room's door-out list, starting from
-    // kLoadStationLists' seed room per area) to find the real inter-area
-    // doors - preferring, per area pair, whichever candidate door has the
-    // most axis-dominant center-to-center delta (the cleanest elevator/
-    // corridor-style connection over an ambiguous diagonal one) - then
-    // nudging each area away from its parent (in the resulting connectivity
-    // tree, rooted at Crateria) ONLY along that connection's dominant axis,
-    // via binary search for the minimal push that clears every already-
-    // placed area's bbox. Pushing only the dominant axis keeps the other
-    // axis exactly door-aligned - e.g. Crateria's elevator down into
-    // Brinstar stays lined up vertically - while real Zebes geometry's
-    // overlapping "depth" still gets resolved without a gap.
+    // These aren't guessed: derived from EVERY real inter-area door in the
+    // ROM (32 doors / 16 unique connections total - walked via the room/door
+    // graph the same way assets/restool.py does: RoomDefHeader.area_index_/
+    // x_coordinate_on_map/y_coordinate_on_map/ptr_to_doorout and each
+    // DoorDef's dest room + x_pos_in_room/y_pos_in_room landing point,
+    // starting from Landing Site + every kLoadStationLists entry as seeds).
+    // Each door gives one constraint: "this point in area A's local grid
+    // must coincide with this point in area B's local grid." All 16
+    // constraints are solved simultaneously (least-squares for an initial
+    // global position, then a force-directed relaxation that pulls every
+    // area pair toward its door-implied relative offset while pushing apart
+    // on bbox overlap) rather than satisfying only a hand-picked few - see
+    // the door extraction + solver script kept alongside this change for
+    // the derivation. Real Zebes room data from different areas genuinely
+    // overlaps in raw coordinates (areas were authored independently), so
+    // some residual overlap remains even in this solution - same as the
+    // previous hand-tuned layout, which also overlapped (e.g. Crateria/
+    // Tourian by 10x9 tiles) despite only encoding 5 connections. Overlap is
+    // harmless here since unexplored tiles are fully transparent (see
+    // makeUnexploredTransparent) - only real explored-room pixels ever
+    // paint over each other, and two real rooms from different areas don't
+    // occupy the same screen-space in practice.
+    // NOTE: these offsets are the CANVAS DESTINATION ORIGIN of each area's
+    // cropped content (i.e. where declMinX/declMinY's corner lands on the
+    // shared canvas) - NOT the same as the solver's raw per-area offset
+    // added to a room's native 0-63 grid coordinate (that's what
+    // WORLD_CONNECTORS' endpoints use instead, since those need true
+    // global positions to match up with room-native door coordinates). Get
+    // this distinction wrong and an area's art silently draws off-canvas
+    // while still LOOKING like a small offset (this bit twice during
+    // development - see git history - before being caught): offset here =
+    // (bbox min) + (solver's raw offset), always non-negative for a canvas
+    // starting at (0,0).
     private static final float[][] WORLD_AREA_LAYOUT = {
-            {6, 0, 46, 19, 2.50f, 13.00f},    // Crateria
-            {5, 0, 58, 20, 0.00f, 32.00f},    // Brinstar
-            {2, 0, 38, 18, 53.00f, 47.50f},   // Norfair
-            {12, 10, 22, 20, 42.50f, 12.50f}, // Wrecked Ship
-            {10, 0, 43, 20, 53.00f, 20.50f},  // Maridia
-            {11, 9, 21, 22, 7.50f, 0.00f},    // Tourian
+            {6, 0, 57, 19, 6.07f, 4.00f},    // Crateria
+            {5, 0, 58, 20, 4.24f, 14.50f},   // Brinstar
+            {2, 0, 38, 18, 32.24f, 36.94f},  // Norfair
+            {10, 10, 22, 20, 42.24f, 2.00f}, // Wrecked Ship
+            {10, 0, 43, 20, 34.70f, 19.90f}, // Maridia
+            {11, 9, 22, 22, 2.00f, 17.29f},  // Tourian
     };
 
     // Distinct accent color per area (roughly matching each area's own
@@ -103,27 +143,71 @@ public class MapStatusView extends View {
             Color.rgb(220, 110, 190), // Tourian - magenta/pink
     };
 
+    // Every real inter-area door connection in the game (16 unique pairs,
+    // from 32 actual doors - two areas can share more than one door, e.g.
+    // Crateria/Wrecked Ship has 5), drawn as a bridge strip directly between
+    // the door's own true landing point in each of the two rooms it
+    // connects (RoomDefHeader.x/y_coordinate_on_map + DoorDef.x/
+    // y_pos_in_room, shifted by each area's WORLD_AREA_LAYOUT offset) so
+    // adjacent areas read as one connected map instead of separate floating
+    // islands, matching how printed Zebes maps show continuous corridors
+    // between regions. Using the real two endpoints directly (rather than
+    // inferring a bridge axis/position from which pixels happen to be
+    // drawn) means every connection renders correctly regardless of how far
+    // apart the layout solve left the two areas - some real areas (e.g.
+    // Tourian) only avoid overlapping their neighbors by sitting a real
+    // distance away, so a couple of these bridges are visibly longer than
+    // others; that's an accurate reflection of the tradeoff, not a bug.
+    // Each row is {areaA, ax, ay, areaB, bx, by} in shared-canvas tile
+    // units, where (ax,ay)/(bx,by) are the two doors' own true positions.
+    private static final float[][] WORLD_CONNECTORS = {
+            {0, 6.07f, 12.00f, 1, 8.24f, 14.50f},    // Crateria (Elevator To Green Brinstar) <-> Brinstar (Green Brinstar Main Shaft)
+            {1, 25.24f, 22.50f, 0, 23.07f, 21.00f},  // Brinstar (Morph Ball Room) <-> Crateria (Elevator To Blue Brinstar)
+            {0, 18.07f, 21.00f, 5, 11.00f, 25.29f},  // Crateria (Old Tourian Shaft) <-> Tourian (Tourian Vertical Escape)
+            {5, 11.00f, 17.29f, 0, 17.07f, 13.00f},  // Tourian (Tourian Elevator) <-> Crateria (Statue Room)
+            {1, 36.24f, 18.50f, 0, 34.07f, 11.00f},  // Brinstar (Catapiller Room) <-> Crateria (Elevator To Red Brinstar)
+            {1, 38.24f, 21.50f, 4, 36.70f, 26.90f},  // Brinstar (Catapiller Room) <-> Maridia (Red Fish Room)
+            {0, 45.07f, 8.00f, 3, 44.24f, 6.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Wrecked Ship Entrance)
+            {0, 45.07f, 4.00f, 3, 44.24f, 2.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Attic)
+            {0, 45.07f, 5.00f, 3, 44.24f, 3.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Bowling Alley)
+            {0, 43.07f, 7.00f, 3, 42.24f, 5.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Gravity Suit Room)
+            {3, 53.24f, 6.00f, 0, 49.07f, 8.00f},    // Wrecked Ship (Electric Death Room) <-> Crateria (East Ocean)
+            {0, 52.07f, 14.00f, 4, 58.70f, 19.90f},  // Crateria (Elevator To Maridia) <-> Maridia (Maridia Elevator Room)
+            {4, 34.70f, 37.90f, 1, 36.24f, 32.50f},  // Maridia (West Maridia Tube) <-> Brinstar (Below Spazer)
+            {4, 36.70f, 37.90f, 1, 40.24f, 32.50f},  // Maridia (East Maridia Tube) <-> Brinstar (Kraid Hideout Entrance)
+            {1, 40.24f, 32.50f, 2, 40.24f, 36.94f},  // Brinstar (Kraid Hideout Entrance) <-> Norfair (Business Center)
+            {0, 43.07f, 6.00f, 3, 42.24f, 4.00f},    // Crateria (West Ocean Bridge) <-> Wrecked Ship (Bowling Alley)
+    };
+
+    // Shared-canvas pixel dimensions covering all 6 areas' declared bboxes
+    // (see WORLD_AREA_LAYOUT), i.e. the full extent of worldCompositeBitmap
+    // below. Computed once from the layout table's own numbers.
+    private static final int WORLD_CANVAS_TILES_W = 70, WORLD_CANVAS_TILES_H = 57;
+    private static final int WORLD_CANVAS_PX_W = WORLD_CANVAS_TILES_W * 8;
+    private static final int WORLD_CANVAS_PX_H = WORLD_CANVAS_TILES_H * 8;
+
     private static final int WORLD_REFRESH_STRIDE = 4;
-    private boolean worldView = false;
+    // World view (the connected, all-areas map) is the default/resting
+    // state - pinch-in (or the +/- buttons) zooms into the current area's
+    // own room-level detail view (drawMap), pinch back out returns here.
+    private boolean worldView = true;
 
     private static final int COL_BG = Color.rgb(13, 15, 23);
     private static final int COL_ACCENT = Color.rgb(255, 158, 68);
-    private static final int COL_LABEL_BG = Color.rgb(13, 15, 23);
 
     private static final String LOGO_TEXT = "METROID";
 
     private final Paint bgPaint = new Paint();
     private final Paint mapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint labelBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint samusRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint samusDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint labelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelBitmapPaint = new Paint();
     private final Paint dimPaint = new Paint();
     private final Paint logoTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint connectorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final RectF zoomInBtn = new RectF();
     private final RectF zoomOutBtn = new RectF();
@@ -140,12 +224,27 @@ public class MapStatusView extends View {
     private int cachedArea = -1;
     private int frameCounter = 0;
 
-    // World-view (zoomed all the way out) state: one cached bitmap/label per
-    // area, refreshed a single area at a time (round-robin) while the world
-    // view is showing, rather than re-decoding all 6 areas every frame.
-    private final Bitmap[] worldAreaBitmaps = new Bitmap[6];
+    // World-view (zoomed all the way out) state: ALL 6 areas are decoded
+    // once each (round-robin, one per WORLD_REFRESH_STRIDE frames) directly
+    // into their real position on one shared, cached composite bitmap
+    // (worldCompositeBitmap) - connector bridges are baked in at the same
+    // time, right when both sides of a junction first become visible. This
+    // mirrors the zelda3-android dual-screen mod's approach (decode the
+    // whole map once into one static bitmap, then just pan/zoom/draw it
+    // every frame) rather than re-positioning/re-cropping separate per-area
+    // bitmaps every frame, which was fragile: since each area's OWN crop
+    // shrinks to its live-explored extent independently, a connector drawn
+    // at the two areas' true (fixed) door position could end up floating in
+    // the gap, disconnected from either area's actual (smaller) drawn
+    // region. Baking everything into one persistent bitmap sidesteps that -
+    // once a tile is drawn, it stays drawn, so there's no per-frame
+    // crop/connector mismatch to get out of sync.
+    private Bitmap worldCompositeBitmap;
+    private Canvas worldCompositeCanvas;
     private final Bitmap[] worldLabelBitmaps = new Bitmap[6];
     private final boolean[] haveWorldLabel = new boolean[6];
+    private final boolean[] worldAreaDrawn = new boolean[6];
+    private final boolean[] worldConnectorDrawn = new boolean[WORLD_CONNECTORS.length];
     private int worldAreaCursor = 0;
     private int worldFrameCounter = 0;
 
@@ -188,17 +287,13 @@ public class MapStatusView extends View {
 
         bgPaint.setColor(COL_BG);
 
-        labelBorderPaint.setStyle(Paint.Style.STROKE);
-        labelBorderPaint.setStrokeWidth(2.5f);
-
         samusRingPaint.setColor(Color.WHITE);
         samusRingPaint.setStyle(Paint.Style.STROKE);
         samusRingPaint.setStrokeWidth(2.5f);
         samusDotPaint.setColor(Color.rgb(255, 70, 70));
 
-        labelBgPaint.setColor(COL_LABEL_BG);
-        labelBgPaint.setAlpha(210);
         labelBitmapPaint.setFilterBitmap(false);  // crisp pixel-art scaling, no blur
+        labelBitmapPaint.setAlpha(150);  // translucent - identifies the area without covering the room layout under it
 
         dimPaint.setColor(Color.BLACK);
 
@@ -217,6 +312,9 @@ public class MapStatusView extends View {
         zoomBtnIconPaint.setStrokeWidth(4);
         zoomBtnIconPaint.setStrokeCap(Paint.Cap.ROUND);
 
+        connectorPaint.setStrokeWidth(12);
+        connectorPaint.setStrokeCap(Paint.Cap.ROUND);
+
         // The map bitmap is native 8px/tile SNES art scaled way up on
         // screen - bilinear-filter it (unlike the label/room graphics) so
         // it reads as a smooth grid like the in-game pause map instead of
@@ -225,6 +323,9 @@ public class MapStatusView extends View {
 
         mapBitmap = Bitmap.createBitmap(MAP_PX_W, MAP_PX_H, Bitmap.Config.ARGB_8888);
         labelBitmap = Bitmap.createBitmap(LABEL_PX_W, LABEL_PX_H, Bitmap.Config.ARGB_8888);
+
+        worldCompositeBitmap = Bitmap.createBitmap(WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H, Bitmap.Config.ARGB_8888);
+        worldCompositeCanvas = new Canvas(worldCompositeBitmap);
     }
 
     @Override
@@ -312,25 +413,46 @@ public class MapStatusView extends View {
         boolean areaChanged = area != cachedArea;
         if (areaChanged || frameCounter % REFRESH_INTERVAL == 0) {
             if (GameState.renderAreaMap(area, mapPixels)) {
+                tintAreaPixels(mapPixels, remapAreaForColor(area));
                 mapBitmap.setPixels(mapPixels, 0, MAP_PX_W, 0, 0, MAP_PX_W, MAP_PX_H);
             }
             if (areaChanged && GameState.renderAreaLabel(area, labelPixels)) {
                 labelBitmap.setPixels(labelPixels, 0, LABEL_PX_W, 0, 0, LABEL_PX_W, LABEL_PX_H);
                 haveLabel = true;
             }
+            if (GameState.decodeExploredGrid(exploredGrid)) {
+                updateExploredBounds();
+            }
             cachedArea = area;
         }
 
-        // Viewport: a zoomFactor-sized window of the 64x32 grid, centered on
-        // Samus (or the grid center if her position isn't valid yet),
-        // clamped so it never scrolls past the map edges. At MIN_ZOOM this
-        // covers the whole grid, matching the old fixed full-map behavior.
-        int sx = samusTile[0], sy = samusTile[1];
-        float centerX = (sx >= 0 && sx < GRID_W) ? sx + 0.5f : GRID_W / 2f;
-        float centerY = (sy >= 0 && sy < GRID_H) ? sy + 0.5f : GRID_H / 2f;
+        // Auto-fit baseline: the explored-tile bbox (with margin, floored to
+        // a minimum size) instead of the full 64x32 grid, so revealed rooms
+        // fill the panel from the start rather than sitting as a speck in a
+        // mostly-black void. zoomFactor then zooms in further from there.
+        float fitCenterX = (exploredMinX + exploredMaxX) / 2f;
+        float fitCenterY = (exploredMinY + exploredMaxY) / 2f;
+        float fitTilesW = Math.max(MIN_AUTOFIT_TILES_W, (exploredMaxX - exploredMinX) * (1f + AUTOFIT_MARGIN_FRAC));
+        float fitTilesH = Math.max(MIN_AUTOFIT_TILES_H, (exploredMaxY - exploredMinY) * (1f + AUTOFIT_MARGIN_FRAC));
+        // Keep aspect ratio matching the grid so the map doesn't stretch.
+        if (fitTilesW / fitTilesH > (float) GRID_W / GRID_H) {
+            fitTilesH = fitTilesW * GRID_H / GRID_W;
+        } else {
+            fitTilesW = fitTilesH * GRID_W / GRID_H;
+        }
+        fitTilesW = Math.min(fitTilesW, GRID_W);
+        fitTilesH = Math.min(fitTilesH, GRID_H);
 
-        float viewTilesW = GRID_W / zoomFactor;
-        float viewTilesH = GRID_H / zoomFactor;
+        // Viewport: a zoomFactor-sized window within the auto-fit region,
+        // centered on Samus (or the auto-fit center if her position isn't
+        // valid yet), clamped so it never scrolls past the map edges. At
+        // MIN_ZOOM this covers exactly the auto-fit region.
+        int sx = samusTile[0], sy = samusTile[1];
+        float centerX = (sx >= 0 && sx < GRID_W) ? sx + 0.5f : fitCenterX;
+        float centerY = (sy >= 0 && sy < GRID_H) ? sy + 0.5f : fitCenterY;
+
+        float viewTilesW = fitTilesW / zoomFactor;
+        float viewTilesH = fitTilesH / zoomFactor;
 
         int srcW = clampInt(Math.round(viewTilesW * 8), 1, MAP_PX_W);
         int srcH = clampInt(Math.round(viewTilesH * 8), 1, MAP_PX_H);
@@ -360,6 +482,38 @@ public class MapStatusView extends View {
         if (haveLabel) drawAreaLabel(canvas, left, top, right, area);
     }
 
+    // Recomputes exploredMinX/Y/MaxX/Y (half-open) from exploredGrid. Falls
+    // back to the whole grid if nothing's explored yet (shouldn't normally
+    // happen once gameplay starts, but keeps the auto-fit math sane if it
+    // ever does).
+    private void updateExploredBounds() {
+        int[] b = computeBounds(exploredGrid);
+        if (b[0] > b[2]) {
+            exploredMinX = 0; exploredMinY = 0; exploredMaxX = GRID_W; exploredMaxY = GRID_H;
+        } else {
+            exploredMinX = b[0]; exploredMinY = b[1]; exploredMaxX = b[2]; exploredMaxY = b[3];
+        }
+    }
+
+    // Scans a 64x32 (0/1)-per-tile grid and returns {minX, minY, maxX, maxY}
+    // (half-open). If nothing's set, returns minX/minY > maxX/maxY (an
+    // empty/invalid range) - callers decide their own fallback.
+    private static int[] computeBounds(byte[] grid) {
+        int minX = GRID_W, minY = GRID_H, maxX = 0, maxY = 0;
+        for (int y = 0; y < GRID_H; y++) {
+            int row = y * GRID_W;
+            for (int x = 0; x < GRID_W; x++) {
+                if (grid[row + x] != 0) {
+                    if (x < minX) minX = x;
+                    if (x + 1 > maxX) maxX = x + 1;
+                    if (y < minY) minY = y;
+                    if (y + 1 > maxY) maxY = y + 1;
+                }
+            }
+        }
+        return new int[] {minX, minY, maxX, maxY};
+    }
+
     // Small +/- buttons in the bottom-right corner, an explicit alternative
     // to pinch-zoom for adjusting zoomFactor. Hit-tested in onTouchEvent.
     private void drawZoomButtons(Canvas canvas) {
@@ -383,51 +537,65 @@ public class MapStatusView extends View {
         return v;
     }
 
-    // Draws the real ROM area-name graphic (e.g. "BRINSTAR") as a banner
-    // across the top of the map, scaled up from its native 96x8px while
-    // keeping its 12:1 aspect ratio, over a translucent backdrop so it stays
-    // legible against whatever's underneath on the map. Outlined in the same
-    // per-area accent color as the world view, so the area's color identity
-    // carries through when zooming in instead of only showing up zoomed out.
-    private void drawAreaLabel(Canvas canvas, float left, float top, float right, int area) {
-        float width = right - left;
-        float maxH = width * 0.075f;
-        float labelH = Math.min(width * 0.8f * (LABEL_PX_H / (float) LABEL_PX_W), maxH);
-        float margin = width * 0.04f;
-        int accent = (area >= 0 && area < WORLD_AREA_COLORS.length) ? WORLD_AREA_COLORS[area] : 0;
-        drawLabelBitmap(canvas, labelBitmap, (left + right) / 2f, top + margin + labelH / 2f,
-                width * 0.8f, maxH, accent);
+    // Ceres (6) and the debug area (7) aren't part of the 6-color world
+    // palette - matches the native RemapArea's fallback to Crateria's data
+    // for area 7 (see second_screen.c), and just reuses Crateria's color
+    // for Ceres too since it's a one-off intro area with no map screen of
+    // its own in vanilla SM.
+    private static int remapAreaForColor(int area) {
+        return (area < 0 || area >= 6) ? 0 : area;
     }
 
-    // Shared by the single-area banner above and each world-view area's
-    // centered label: scales a 96x8px area-name graphic to fit widthBudget
-    // wide (clamped to maxHeight tall, preserving aspect), centered on
-    // (centerX, centerY), over a translucent backdrop so it stays legible
-    // against whatever's underneath. If accentColor is non-zero, outlines
-    // the backdrop in that color so areas stay tellable apart by color, not
-    // just position.
-    private void drawLabelBitmap(Canvas canvas, Bitmap label, float centerX, float centerY,
-                                  float widthBudget, float maxHeight, int accentColor) {
-        float labelW = widthBudget;
+    // The flat fill color SM2_RenderAreaMap uses for unexplored tiles (see
+    // kUnexploredColor in second_screen.c) - skipped by tintAreaPixels so
+    // unexplored area stays a neutral, un-tinted background instead of
+    // turning into a visible colored rectangle exactly at the explored
+    // bbox's edges.
+    private static final int UNEXPLORED_FILL = 0xFF14141E;
+
+    // Tints the just-decoded map pixels (in place) with the given area's
+    // accent color, so each area reads as its own distinct color on the map
+    // (like the classic printed Zebes maps) instead of every area coming out
+    // the same SNES blue/cyan. Multiplies each channel rather than replacing
+    // it, so walls/floor/shading detail from the real ROM art is preserved -
+    // only the hue shifts, brightness contrast stays intact. Unexplored-fill
+    // pixels are left alone (see UNEXPLORED_FILL) so unexplored area reads
+    // as neutral background, not a tinted box.
+    private static void tintAreaPixels(int[] pixels, int area) {
+        if (area < 0 || area >= WORLD_AREA_COLORS.length) return;
+        int accent = WORLD_AREA_COLORS[area];
+        float tr = Color.red(accent) / 255f, tg = Color.green(accent) / 255f, tb = Color.blue(accent) / 255f;
+        for (int i = 0; i < pixels.length; i++) {
+            int p = pixels[i];
+            if (p == UNEXPLORED_FILL) continue;
+            int r = (int) (((p >> 16) & 0xFF) * tr);
+            int g = (int) (((p >> 8) & 0xFF) * tg);
+            int b = (int) ((p & 0xFF) * tb);
+            pixels[i] = (p & 0xFF000000) | (r << 16) | (g << 8) | b;
+        }
+    }
+
+    // Draws the real ROM area-name graphic (e.g. "BRINSTAR") small and
+    // translucent in the top-left corner of the map, instead of a big banner
+    // across the top - just there to identify the area without covering any
+    // of the actual room layout underneath it.
+    private void drawAreaLabel(Canvas canvas, float left, float top, float right, int area) {
+        float width = right - left;
+        float labelW = width * 0.32f;
         float labelH = labelW * (LABEL_PX_H / (float) LABEL_PX_W);
-        if (labelH > maxHeight) {
-            labelH = maxHeight;
-            labelW = labelH * (LABEL_PX_W / (float) LABEL_PX_H);
-        }
+        float margin = width * 0.035f;
+        drawLabelBitmap(canvas, labelBitmap, left + margin + labelW / 2f, top + margin + labelH / 2f, labelW);
+    }
 
-        float bx0 = centerX - labelW / 2f, bx1 = centerX + labelW / 2f;
-        float by0 = centerY - labelH / 2f, by1 = centerY + labelH / 2f;
-
-        float padX = labelH * 0.7f, padY = labelH * 0.4f;
-        RectF backdrop = new RectF(bx0 - padX, by0 - padY, bx1 + padX, by1 + padY);
-        float r = labelH * 0.35f;
-        canvas.drawRoundRect(backdrop, r, r, labelBgPaint);
-        if (accentColor != 0) {
-            labelBorderPaint.setColor(accentColor);
-            canvas.drawRoundRect(backdrop, r, r, labelBorderPaint);
-        }
-
-        Rect dest = new Rect((int) bx0, (int) by0, (int) bx1, (int) by1);
+    // Shared by the single-area corner label above and each world-view
+    // area's label: scales a 96x8px area-name graphic to labelW wide
+    // (preserving its 12:1 aspect ratio), centered on (centerX, centerY), no
+    // background box - drawn directly over the map at reduced opacity so it
+    // reads as a subtle identifier rather than covering the room layout.
+    private void drawLabelBitmap(Canvas canvas, Bitmap label, float centerX, float centerY, float labelW) {
+        float labelH = labelW * (LABEL_PX_H / (float) LABEL_PX_W);
+        Rect dest = new Rect((int) (centerX - labelW / 2f), (int) (centerY - labelH / 2f),
+                (int) (centerX + labelW / 2f), (int) (centerY + labelH / 2f));
         canvas.drawBitmap(label, null, dest, labelBitmapPaint);
     }
 
@@ -440,11 +608,17 @@ public class MapStatusView extends View {
         worldAreaCursor = (area >= 0 && area <= 5) ? area : 0;
     }
 
-    // Keeps the 6 area thumbnails reasonably fresh without spending a whole
-    // frame decoding all of them: one area's map bitmap is re-decoded every
-    // WORLD_REFRESH_STRIDE frames, round-robin, so the cost per frame stays
-    // the same as the single-area view's. Labels are cheap (12 tiles each)
-    // so all 6 are just decoded once, as soon as the ROM is available.
+    // Keeps the world map fresh without spending a whole frame decoding
+    // everything: one area is re-decoded every WORLD_REFRESH_STRIDE frames,
+    // round-robin, and painted directly into the persistent
+    // worldCompositeBitmap at its real position (only its actually-explored
+    // pixels - unexplored tiles are left transparent so the shared dark
+    // background shows through and previously-drawn neighboring areas or
+    // connectors are never overwritten). Once a tile is drawn it stays
+    // drawn - re-decoding the same area later just redraws its (now
+    // possibly larger) explored region on top, so nothing already on the
+    // composite is ever erased. Labels are cheap (12 tiles each) so all 6
+    // are just decoded once, as soon as the ROM is available.
     private void ensureWorldAreaFresh() {
         for (int a = 0; a < 6; a++) {
             if (!haveWorldLabel[a] && GameState.renderAreaLabel(a, labelPixels)) {
@@ -460,22 +634,51 @@ public class MapStatusView extends View {
         if (worldFrameCounter % WORLD_REFRESH_STRIDE == 0) {
             int a = worldAreaCursor;
             worldAreaCursor = (worldAreaCursor + 1) % 6;
-            if (GameState.renderAreaMap(a, mapPixels)) {
-                if (worldAreaBitmaps[a] == null) {
-                    worldAreaBitmaps[a] = Bitmap.createBitmap(MAP_PX_W, MAP_PX_H, Bitmap.Config.ARGB_8888);
+            if (GameState.areaHasAnyExploredTile(a) && GameState.renderAreaMap(a, mapPixels)) {
+                tintAreaPixels(mapPixels, a);
+                makeUnexploredTransparent(mapPixels);
+                mapBitmap.setPixels(mapPixels, 0, MAP_PX_W, 0, 0, MAP_PX_W, MAP_PX_H);
+
+                float[] l = WORLD_AREA_LAYOUT[a];
+                int declMinX = (int) l[0], declMinY = (int) l[1], declMaxX = (int) l[2], declMaxY = (int) l[3];
+                Rect src = new Rect(declMinX * 8, declMinY * 8, declMaxX * 8, declMaxY * 8);
+                Rect dest = new Rect((int) (l[4] * 8), (int) (l[5] * 8),
+                        (int) (l[4] * 8) + src.width(), (int) (l[5] * 8) + src.height());
+                worldCompositeCanvas.drawBitmap(mapBitmap, src, dest, mapPaint);
+                worldAreaDrawn[a] = true;
+
+                // Bake in any connector whose both endpoints are now drawn,
+                // right away - a junction only needs to be drawn once, ever.
+                // WORLD_CONNECTORS row layout: {areaA, ax, ay, areaB, bx, by}.
+                for (int i = 0; i < WORLD_CONNECTORS.length; i++) {
+                    if (worldConnectorDrawn[i]) continue;
+                    float[] c = WORLD_CONNECTORS[i];
+                    int areaA = (int) c[0], areaB = (int) c[3];
+                    if (worldAreaDrawn[areaA] && worldAreaDrawn[areaB]) {
+                        drawWorldConnector(worldCompositeCanvas, c);
+                        worldConnectorDrawn[i] = true;
+                    }
                 }
-                worldAreaBitmaps[a].setPixels(mapPixels, 0, MAP_PX_W, 0, 0, MAP_PX_W, MAP_PX_H);
             }
         }
     }
 
-    // The fully-zoomed-out view: all 6 areas composited into one shared
-    // canvas at their real relative positions (WORLD_AREA_LAYOUT), each
-    // showing that area's real map art cropped to its own explored-room
-    // bounding box - same underlying SM2_RenderAreaMap data as the
-    // single-area view, just positioned to form one connected map instead
-    // of a grid of separate panels. Samus's marker only appears in
-    // whichever area she's actually in.
+    // Sets every UNEXPLORED_FILL pixel's alpha to 0 (in place), so drawing
+    // this area's decoded bitmap onto the shared composite only paints its
+    // actually-explored tiles, leaving everything else (background, other
+    // areas, connectors already drawn) untouched.
+    private static void makeUnexploredTransparent(int[] pixels) {
+        for (int i = 0; i < pixels.length; i++) {
+            if ((pixels[i] & 0x00FFFFFF) == (UNEXPLORED_FILL & 0x00FFFFFF)) pixels[i] = 0;
+        }
+    }
+
+    // The fully-zoomed-out view: one persistent, incrementally-updated
+    // composite bitmap (worldCompositeBitmap - see ensureWorldAreaFresh)
+    // covering all 6 areas at their real relative positions, panned/scaled
+    // to frame whatever's been explored so far - a single drawBitmap call,
+    // same as zelda3-android's own overworld minimap, rather than
+    // repositioning/cropping separate per-area bitmaps every frame.
     private void drawWorldView(Canvas canvas, float left, float top, float right, float bottom) {
         GameState.getSamusMapTile(samusTile);
         ensureWorldAreaFresh();
@@ -485,7 +688,6 @@ public class MapStatusView extends View {
         // map - Samus's marker just won't appear anywhere then.
         int remappedCurrent = (currentArea >= 0 && currentArea <= 5) ? currentArea : -1;
 
-        boolean[] visible = new boolean[6];
         float visMinX = Float.MAX_VALUE, visMinY = Float.MAX_VALUE;
         float visMaxX = -Float.MAX_VALUE, visMaxY = -Float.MAX_VALUE;
         for (int area = 0; area < 6; area++) {
@@ -493,7 +695,6 @@ public class MapStatusView extends View {
             // leftover reveal (e.g. from an earlier save/session) can't show
             // an area the player hasn't actually set foot in this run.
             if (!GameState.areaHasAnyExploredTile(area)) continue;
-            visible[area] = true;
             float[] l = WORLD_AREA_LAYOUT[area];
             visMinX = Math.min(visMinX, l[4]);
             visMinY = Math.min(visMinY, l[5]);
@@ -516,38 +717,99 @@ public class MapStatusView extends View {
         float originX = left + (availW - canvasW * scale) / 2f - visMinX * scale;
         float originY = top + (availH - canvasH * scale) / 2f - visMinY * scale;
 
+        Rect src = new Rect(0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
+        Rect dest = new Rect((int) originX, (int) originY,
+                (int) (originX + WORLD_CANVAS_TILES_W * scale), (int) (originY + WORLD_CANVAS_TILES_H * scale));
+        canvas.drawBitmap(worldCompositeBitmap, src, dest, mapPaint);
+
         for (int area = 0; area < 6; area++) {
-            if (!visible[area]) continue;
-
+            if (!worldAreaDrawn[area] || !haveWorldLabel[area]) continue;
             float[] l = WORLD_AREA_LAYOUT[area];
-            int minX = (int) l[0], minY = (int) l[1], maxX = (int) l[2], maxY = (int) l[3];
-            float canvasX = l[4], canvasY = l[5];
+            float dx0 = originX + l[4] * scale, dy0 = originY + l[5] * scale;
+            float dx1 = dx0 + (l[2] - l[0]) * scale;
+            float labelW = Math.min((dx1 - dx0) * 0.55f, (right - left) * 0.16f);
+            float labelH = labelW * (LABEL_PX_H / (float) LABEL_PX_W);
+            float labelMargin = (right - left) * 0.012f;
+            drawLabelBitmap(canvas, worldLabelBitmaps[area],
+                    dx0 + labelMargin + labelW / 2f, dy0 + labelMargin + labelH / 2f, labelW);
+        }
 
-            float dx0 = originX + canvasX * scale, dy0 = originY + canvasY * scale;
-            float dx1 = dx0 + (maxX - minX) * scale, dy1 = dy0 + (maxY - minY) * scale;
-
-            if (worldAreaBitmaps[area] != null) {
-                Rect src = new Rect(minX * 8, minY * 8, maxX * 8, maxY * 8);
-                Rect dest = new Rect((int) dx0, (int) dy0, (int) dx1, (int) dy1);
-                canvas.drawBitmap(worldAreaBitmaps[area], src, dest, mapPaint);
-            }
-
-            if (haveWorldLabel[area]) {
-                drawLabelBitmap(canvas, worldLabelBitmaps[area], (dx0 + dx1) / 2f, (dy0 + dy1) / 2f,
-                        (dx1 - dx0) * 0.42f, (dy1 - dy0) * 0.13f, WORLD_AREA_COLORS[area]);
-            }
-
-            if (area == remappedCurrent) {
-                int sx = samusTile[0], sy = samusTile[1];
-                if (sx >= minX && sx < maxX && sy >= minY && sy < maxY) {
-                    float mx = originX + (canvasX + (sx - minX) + 0.5f) * scale;
-                    float my = originY + (canvasY + (sy - minY) + 0.5f) * scale;
-                    float radius = scale * 0.55f;
-                    canvas.drawCircle(mx, my, radius, samusDotPaint);
-                    canvas.drawCircle(mx, my, radius, samusRingPaint);
-                }
+        if (remappedCurrent >= 0) {
+            int sx = samusTile[0], sy = samusTile[1];
+            float[] l = WORLD_AREA_LAYOUT[remappedCurrent];
+            int declMinX = (int) l[0], declMinY = (int) l[1], declMaxX = (int) l[2], declMaxY = (int) l[3];
+            if (sx >= declMinX && sx < declMaxX && sy >= declMinY && sy < declMaxY) {
+                float mx = originX + (l[4] + (sx - declMinX) + 0.5f) * scale;
+                float my = originY + (l[5] + (sy - declMinY) + 0.5f) * scale;
+                float radius = scale * 0.55f;
+                canvas.drawCircle(mx, my, radius, samusDotPaint);
+                canvas.drawCircle(mx, my, radius, samusRingPaint);
             }
         }
+    }
+
+    // Draws one connector bridge strip directly onto the persistent
+    // composite bitmap, once, the moment both endpoint areas have been
+    // drawn at least once (see ensureWorldAreaFresh) - so the composited
+    // map reads as one connected Zebes instead of separate floating area
+    // islands. Colored as a blend of both areas' accent tints so the
+    // bridge itself hints at the transition between them.
+    //
+    // Draws a straight strip directly between the door's own two true
+    // landing points (c = {areaA, ax, ay, areaB, bx, by}, both endpoints
+    // already known exactly from the room/door graph extraction - see
+    // WORLD_CONNECTORS's comment), rather than inferring a bridge axis/
+    // position from which pixels happen to already be drawn. This is
+    // correct by construction for every connection regardless of gap size
+    // or direction, unlike a pixel-scan search which can miss areas placed
+    // diagonally or farther apart than its search radius.
+    // Drawn as a filled tube with a brighter outline (dark fill + light
+    // border, same two-tone look the real SM map tiles use for corridors)
+    // rather than a flat single-color line, so it reads as an actual
+    // passage connecting the two areas instead of a debug/annotation
+    // stroke. Width matches CONNECTOR_HALF_WIDTH*2 in room-tile scale.
+    private static final float CONNECTOR_HALF_WIDTH = 5f;
+
+    private void drawWorldConnector(Canvas canvas, float[] c) {
+        int areaA = (int) c[0], areaB = (int) c[3];
+        float ax = c[1] * 8, ay = c[2] * 8;
+        float bx = c[4] * 8, by = c[5] * 8;
+        int blend = blendColors(WORLD_AREA_COLORS[areaA], WORLD_AREA_COLORS[areaB]);
+
+        // Dark fill first (slightly darker than the blended accent, matching
+        // real room interiors), then a bright outline stroke on top so the
+        // corridor has the same "dark floor, lit border" read as actual
+        // decoded map rooms - a flat line by contrast looks like a UI
+        // annotation, not part of the level geometry.
+        connectorPaint.setStyle(Paint.Style.STROKE);
+        connectorPaint.setStrokeWidth(CONNECTOR_HALF_WIDTH * 2);
+        connectorPaint.setColor(darken(blend, 0.35f));
+        canvas.drawLine(ax, ay, bx, by, connectorPaint);
+
+        connectorPaint.setStrokeWidth(CONNECTOR_HALF_WIDTH * 2 - 3f);
+        connectorPaint.setColor(darken(blend, 0.6f));
+        canvas.drawLine(ax, ay, bx, by, connectorPaint);
+
+        connectorPaint.setStyle(Paint.Style.FILL);
+    }
+
+    // Multiplies each RGB channel by `factor` (0..1), darkening a color
+    // while preserving its hue - used to derive the corridor's dark
+    // interior fill and mid-tone border from the same blended accent color.
+    private static int darken(int color, float factor) {
+        int r = (int) (Color.red(color) * factor);
+        int g = (int) (Color.green(color) * factor);
+        int b = (int) (Color.blue(color) * factor);
+        return Color.rgb(r, g, b);
+    }
+
+    // Simple 50/50 RGB average of two area accent colors, for the bridge
+    // strip's color at each junction.
+    private static int blendColors(int a, int b) {
+        int r = (Color.red(a) + Color.red(b)) / 2;
+        int g = (Color.green(a) + Color.green(b)) / 2;
+        int bl = (Color.blue(a) + Color.blue(b)) / 2;
+        return Color.rgb(r, g, bl);
     }
 
     // Dims the whole screen down to near-black and shows a faint, dimmed

@@ -60,6 +60,16 @@ void SM2_GetSamusMapTile(int *out_x, int *out_y);
 // second screen's world view to hide areas nothing's been revealed in yet.
 bool SM2_AreaHasAnyExploredTile(int area);
 
+// Same as SM2_DecodeExploredGrid, but for any area (0-7), not just the
+// currently-loaded one - the current area's bits come from the live in-RAM
+// copy, other areas' from explored_map_tiles_saved, matching
+// SM2_RenderAreaMap's own per-area source selection. Used by the second
+// screen's world view to crop each area's displayed region down to its own
+// actually-explored extent rather than a fixed full-area bounding box.
+// out must be 64*32 = 2048 bytes. Returns false (leaving out untouched) if
+// the ROM isn't loaded yet.
+bool SM2_DecodeExploredGridForArea(int area, uint8 *out);
+
 // Renders the given area's map into a 512x256 ARGB8888 buffer (64x32 tiles
 // at 8x8px each, matching SM2_DecodeExploredGrid's grid), decoding the same
 // SNES 4bpp tile graphics/palette the in-game pause-menu map screen uses
