@@ -122,13 +122,22 @@ public class MapStatusView extends View {
     // development - see git history - before being caught): offset here =
     // (bbox min) + (solver's raw offset), always non-negative for a canvas
     // starting at (0,0).
+    // BFS spanning-tree layout: root at Crateria, each area anchored to ONE
+    // real door connection to an already-placed neighbor with zero gap on
+    // that specific door, rather than solving all 16 constraints at once
+    // (an earlier force-relaxation approach that simultaneously satisfied
+    // all connections is preserved on branch backup-force-directed-layout,
+    // but left several areas - Tourian especially - visibly adrift from
+    // their neighbors since no single connection was fully satisfied
+    // anywhere; anchoring one exact connection per area reads much closer
+    // to a single fused landmass, verified on-device).
     private static final float[][] WORLD_AREA_LAYOUT = {
-            {6, 0, 57, 19, 6.07f, 4.00f},    // Crateria
-            {5, 0, 58, 20, 4.24f, 14.50f},   // Brinstar
-            {2, 0, 38, 18, 32.24f, 36.94f},  // Norfair
-            {10, 10, 22, 20, 42.24f, 2.00f}, // Wrecked Ship
-            {10, 0, 43, 20, 34.70f, 19.90f}, // Maridia
-            {11, 9, 22, 22, 2.00f, 17.29f},  // Tourian
+            {6, 0, 57, 19, 6.07f, 4.00f},    // Crateria (anchor, unchanged)
+            {5, 0, 58, 20, 2.07f, 12.00f},   // Brinstar
+            {2, 0, 38, 18, 30.07f, 30.00f},  // Norfair
+            {10, 10, 22, 20, 43.07f, 4.00f}, // Wrecked Ship
+            {10, 0, 43, 20, 28.07f, 14.00f}, // Maridia
+            {11, 9, 22, 22, 9.07f, 13.00f},  // Tourian
     };
 
     // Distinct accent color per area (roughly matching each area's own
@@ -161,22 +170,22 @@ public class MapStatusView extends View {
     // Each row is {areaA, ax, ay, areaB, bx, by} in shared-canvas tile
     // units, where (ax,ay)/(bx,by) are the two doors' own true positions.
     private static final float[][] WORLD_CONNECTORS = {
-            {0, 6.07f, 12.00f, 1, 8.24f, 14.50f},    // Crateria (Elevator To Green Brinstar) <-> Brinstar (Green Brinstar Main Shaft)
-            {1, 25.24f, 22.50f, 0, 23.07f, 21.00f},  // Brinstar (Morph Ball Room) <-> Crateria (Elevator To Blue Brinstar)
-            {0, 18.07f, 21.00f, 5, 11.00f, 25.29f},  // Crateria (Old Tourian Shaft) <-> Tourian (Tourian Vertical Escape)
-            {5, 11.00f, 17.29f, 0, 17.07f, 13.00f},  // Tourian (Tourian Elevator) <-> Crateria (Statue Room)
-            {1, 36.24f, 18.50f, 0, 34.07f, 11.00f},  // Brinstar (Catapiller Room) <-> Crateria (Elevator To Red Brinstar)
-            {1, 38.24f, 21.50f, 4, 36.70f, 26.90f},  // Brinstar (Catapiller Room) <-> Maridia (Red Fish Room)
-            {0, 45.07f, 8.00f, 3, 44.24f, 6.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Wrecked Ship Entrance)
-            {0, 45.07f, 4.00f, 3, 44.24f, 2.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Attic)
-            {0, 45.07f, 5.00f, 3, 44.24f, 3.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Bowling Alley)
-            {0, 43.07f, 7.00f, 3, 42.24f, 5.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Gravity Suit Room)
-            {3, 53.24f, 6.00f, 0, 49.07f, 8.00f},    // Wrecked Ship (Electric Death Room) <-> Crateria (East Ocean)
-            {0, 52.07f, 14.00f, 4, 58.70f, 19.90f},  // Crateria (Elevator To Maridia) <-> Maridia (Maridia Elevator Room)
-            {4, 34.70f, 37.90f, 1, 36.24f, 32.50f},  // Maridia (West Maridia Tube) <-> Brinstar (Below Spazer)
-            {4, 36.70f, 37.90f, 1, 40.24f, 32.50f},  // Maridia (East Maridia Tube) <-> Brinstar (Kraid Hideout Entrance)
-            {1, 40.24f, 32.50f, 2, 40.24f, 36.94f},  // Brinstar (Kraid Hideout Entrance) <-> Norfair (Business Center)
-            {0, 43.07f, 6.00f, 3, 42.24f, 4.00f},    // Crateria (West Ocean Bridge) <-> Wrecked Ship (Bowling Alley)
+            {0, 6.07f, 12.00f, 1, 6.07f, 12.00f},    // Crateria (Elevator To Green Brinstar) <-> Brinstar (Green Brinstar Main Shaft) [exact]
+            {1, 23.07f, 20.00f, 0, 23.07f, 21.00f},  // Brinstar (Morph Ball Room) <-> Crateria (Elevator To Blue Brinstar)
+            {0, 18.07f, 21.00f, 5, 18.07f, 21.00f},  // Crateria (Old Tourian Shaft) <-> Tourian (Tourian Vertical Escape) [exact]
+            {5, 18.07f, 13.00f, 0, 17.07f, 13.00f},  // Tourian (Tourian Elevator) <-> Crateria (Statue Room)
+            {1, 34.07f, 16.00f, 0, 34.07f, 11.00f},  // Brinstar (Catapiller Room) <-> Crateria (Elevator To Red Brinstar)
+            {1, 36.07f, 19.00f, 4, 30.07f, 21.00f},  // Brinstar (Catapiller Room) <-> Maridia (Red Fish Room)
+            {0, 45.07f, 8.00f, 3, 45.07f, 8.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Wrecked Ship Entrance) [exact]
+            {0, 45.07f, 4.00f, 3, 45.07f, 4.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Attic) [exact]
+            {0, 45.07f, 5.00f, 3, 45.07f, 5.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Bowling Alley) [exact]
+            {0, 43.07f, 7.00f, 3, 43.07f, 7.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Gravity Suit Room) [exact]
+            {3, 54.07f, 8.00f, 0, 49.07f, 8.00f},    // Wrecked Ship (Electric Death Room) <-> Crateria (East Ocean)
+            {0, 52.07f, 14.00f, 4, 52.07f, 14.00f},  // Crateria (Elevator To Maridia) <-> Maridia (Maridia Elevator Room) [exact]
+            {4, 28.07f, 32.00f, 1, 34.07f, 30.00f},  // Maridia (West Maridia Tube) <-> Brinstar (Below Spazer)
+            {4, 30.07f, 32.00f, 1, 38.07f, 30.00f},  // Maridia (East Maridia Tube) <-> Brinstar (Kraid Hideout Entrance)
+            {1, 38.07f, 30.00f, 2, 38.07f, 30.00f},  // Brinstar (Kraid Hideout Entrance) <-> Norfair (Business Center) [exact]
+            {0, 43.07f, 6.00f, 3, 43.07f, 6.00f},    // Crateria (West Ocean Bridge) <-> Wrecked Ship (Bowling Alley) [exact]
     };
 
     // Shared-canvas pixel dimensions covering all 6 areas' declared bboxes
