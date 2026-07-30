@@ -170,7 +170,7 @@ public class MapStatusView extends View {
             {2, 0, 38, 18, 30.07f, 30.00f},  // Norfair
             {10, 10, 22, 20, 43.07f, 4.00f}, // Wrecked Ship
             {10, 0, 43, 20, 28.07f, 14.00f}, // Maridia
-            {11, 9, 22, 22, 9.07f, 13.00f},  // Tourian
+            {11, 9, 22, 22, 8.07f, 13.00f},  // Tourian
     };
 
     // Per-area declared-bbox tile counts, used as a static ownership
@@ -231,8 +231,8 @@ public class MapStatusView extends View {
     private static final float[][] WORLD_CONNECTORS = {
             {0, 6.07f, 12.00f, 1, 6.07f, 12.00f},    // Crateria (Elevator To Green Brinstar) <-> Brinstar (Green Brinstar Main Shaft) [exact]
             {1, 23.07f, 20.00f, 0, 23.07f, 21.00f},  // Brinstar (Morph Ball Room) <-> Crateria (Elevator To Blue Brinstar)
-            {0, 18.07f, 21.00f, 5, 18.07f, 21.00f},  // Crateria (Old Tourian Shaft) <-> Tourian (Tourian Vertical Escape) [exact]
-            {5, 18.07f, 13.00f, 0, 17.07f, 13.00f},  // Tourian (Tourian Elevator) <-> Crateria (Statue Room)
+            {0, 18.07f, 21.00f, 5, 17.07f, 21.00f},  // Crateria (Old Tourian Shaft) <-> Tourian (Tourian Vertical Escape)
+            {5, 17.07f, 13.00f, 0, 17.07f, 13.00f},  // Tourian (Tourian Elevator) <-> Crateria (Statue Room) [exact]
             {1, 34.07f, 16.00f, 0, 34.07f, 11.00f},  // Brinstar (Catapiller Room) <-> Crateria (Elevator To Red Brinstar)
             {1, 36.07f, 19.00f, 4, 30.07f, 21.00f},  // Brinstar (Catapiller Room) <-> Maridia (Red Fish Room)
             {0, 45.07f, 8.00f, 3, 45.07f, 8.00f},    // Crateria (West Ocean) <-> Wrecked Ship (Wrecked Ship Entrance) [exact]
