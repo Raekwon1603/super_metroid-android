@@ -95,6 +95,14 @@ bool SM2_RenderAreaMap(int area, uint32 *out);
 bool SM2_RenderItemIcon(int bit, uint32 *out);
 bool SM2_RenderBeamIcon(int bit, uint32 *out);
 
+// Renders the real pause-menu equipment screen's green wireframe Samus
+// body graphic into a 64x136 ARGB8888 buffer (out must be 64*136 = 8704
+// uint32s). equipped_items_value picks the correct one of 4 pre-baked
+// variants (no suit / Gravity only / Varia only / both) - pass
+// SM2_GetEquippedItems()'s own return value. Each tile's own palette
+// index 0 is left transparent. Returns false if the ROM isn't loaded yet.
+bool SM2_RenderSamusWireframe(int equipped_items_value, uint32 *out);
+
 // Renders the actual gameplay-HUD missile icon (the small tank glyph shown
 // next to the ammo count during normal play - kHudTilemaps_Missiles in
 // sm_80.c) into a 24x16 ARGB8888 buffer (out must be 24*16 = 384 uint32s).

@@ -241,3 +241,15 @@ JNIEXPORT jboolean JNICALL JFN(renderPowerBombIcon)(JNIEnv *env, jclass clazz, j
   (*env)->SetIntArrayRegion(env, out, 0, 16 * 16, (jint *)px);
   return JNI_TRUE;
 }
+
+// 64x136 ARGB8888 scratch buffer - too large to put on the stack safely,
+// same reasoning as g_map_px above.
+static uint32 g_wireframe_px[64 * 136];
+
+JNIEXPORT jboolean JNICALL JFN(renderSamusWireframe)(JNIEnv *env, jclass clazz, jint equippedItems, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 64 * 136) return JNI_FALSE;
+  if (!SM2_RenderSamusWireframe(equippedItems, g_wireframe_px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 64 * 136, (jint *)g_wireframe_px);
+  return JNI_TRUE;
+}

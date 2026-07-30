@@ -319,6 +319,10 @@ public class MapStatusView extends View {
     private final int[] powerBombIconPixels = new int[16 * 16];
     private Bitmap powerBombIconBitmap;
     private boolean havePowerBombIcon = false;
+    private static final int WIREFRAME_PX_W = 64, WIREFRAME_PX_H = 136;
+    private final int[] wireframePixels = new int[WIREFRAME_PX_W * WIREFRAME_PX_H];
+    private Bitmap wireframeBitmap;
+    private int wireframeCachedEquippedItems = Integer.MIN_VALUE;
     private final RectF panelRect = new RectF();
     private final RectF hudBarRect = new RectF();
 
@@ -550,6 +554,7 @@ public class MapStatusView extends View {
         missileIconBitmap = Bitmap.createBitmap(24, 16, Bitmap.Config.ARGB_8888);
         superMissileIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
         powerBombIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
+        wireframeBitmap = Bitmap.createBitmap(WIREFRAME_PX_W, WIREFRAME_PX_H, Bitmap.Config.ARGB_8888);
     }
 
     @Override
@@ -754,14 +759,43 @@ public class MapStatusView extends View {
         float left = panelRect.left + pad, right = panelRect.right - pad;
         float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
         float colGap = pad * 0.8f;
-        float colW = (right - left - colGap) / 2f;
 
-        // Left column: SUIT then MISC. Right column: BOOTS then BEAM -
-        // mirrors the real pause screen's layout. Box heights are
-        // proportional to their own entry count so a 2-entry SUIT box
-        // isn't the same height as a 4-entry MISC. box.
+        // 3 columns: SUIT/MISC. boxes | wireframe body | BOOTS/BEAM boxes -
+        // mirrors the real pause screen's layout (side boxes flanking the
+        // green wireframe Samus). The wireframe's own native aspect ratio
+        // (64x136, roughly 1:2.1) sizes its column; the two box columns
+        // split whatever width remains.
+        float wireframeAspect = WIREFRAME_PX_W / (float) WIREFRAME_PX_H;
+        float wireframeW = Math.min((right - left) * 0.26f, (bottom - top) * wireframeAspect);
+        float colW = (right - left - colGap * 2 - wireframeW) / 2f;
+
         drawEquipColumn(canvas, left, top, colW, bottom - top, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
-        drawEquipColumn(canvas, left + colW + colGap, top, colW, bottom - top, new EquipGroup[] { EQUIP_BOOTS, EQUIP_BEAM });
+        drawWireframe(canvas, left + colW + colGap, top, wireframeW, bottom - top);
+        drawEquipColumn(canvas, left + colW + colGap + wireframeW + colGap, top, colW, bottom - top,
+                new EquipGroup[] { EQUIP_BOOTS, EQUIP_BEAM });
+    }
+
+    // Draws the real pause-menu wireframe Samus body graphic, centered in
+    // the given rect at its native aspect ratio (no stretch). Re-decoded
+    // only when equipped_items actually changes (a new suit is collected),
+    // since the ROM data behind a given suit-state combo never changes
+    // otherwise - same lazy-cache idea as the missile/super/PB icons.
+    private void drawWireframe(Canvas canvas, float x, float top, float w, float h) {
+        int equippedItems = GameState.getEquippedItems();
+        if (equippedItems != wireframeCachedEquippedItems
+                && GameState.renderSamusWireframe(equippedItems, wireframePixels)) {
+            wireframeBitmap.setPixels(wireframePixels, 0, WIREFRAME_PX_W, 0, 0, WIREFRAME_PX_W, WIREFRAME_PX_H);
+            wireframeCachedEquippedItems = equippedItems;
+        }
+        float aspect = WIREFRAME_PX_W / (float) WIREFRAME_PX_H;
+        float drawH = h, drawW = drawH * aspect;
+        if (drawW > w) {
+            drawW = w;
+            drawH = drawW / aspect;
+        }
+        float cx = x + w / 2f, cy = top + h / 2f;
+        RectF dest = new RectF(cx - drawW / 2f, cy - drawH / 2f, cx + drawW / 2f, cy + drawH / 2f);
+        canvas.drawBitmap(wireframeBitmap, null, dest, mapPaint);
     }
 
     private void drawEquipColumn(Canvas canvas, float x, float top, float w, float h, EquipGroup[] groups) {

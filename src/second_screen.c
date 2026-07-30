@@ -44,6 +44,22 @@
 #define kEquipmentTilemaps_Boots ((const uint16 *)RomFixedPtr(0x82c0a2))
 #define kEquipIconTiles 8  // output width in tiles; weapons only use 4 and leave the rest transparent
 
+// The green wireframe Samus body graphic shown in the middle of the real
+// pause-menu equipment screen (WriteSamusWireframeTilemap in sm_82.c) - an
+// 8x17-tile (64x136px) BG tilemap, one of 4 pre-baked variants selected by
+// which suit(s) are equipped (kEquipmentScreenWireframeCmp[i] is matched
+// against equipped_items & 0x101 - bit 0x001=Varia, bit 0x100=Gravity - to
+// pick kEquipmentScreenWireframePtrs[i], a bank-0x82-relative pointer to
+// that variant's 136 literal tilemap words). Same 4bpp tile graphics/
+// palette bank as the SUIT/MISC/BOOTS/BEAM icons (kMapTileGfx/
+// kPauseScreenPalettes) - verified correct via a standalone Python
+// re-implementation against the real ROM dump before this code was
+// written (all 4 variants decoded to recognizable Samus silhouettes).
+#define kEquipmentScreenWireframeCmp ((const uint16 *)RomFixedPtr(0x82b257))
+#define kEquipmentScreenWireframePtrs ((const uint16 *)RomFixedPtr(0x82b25f))
+#define kWireframeTilesW 8
+#define kWireframeTilesH 17
+
 // The elevator/room-select screen's per-area name label (see
 // DrawRoomSelectMapAreaLabel and its kPauseAreaLabelTilemap[area_index] use
 // in sm_82.c, which redefines this same address locally too): an array of 8
@@ -304,6 +320,52 @@ bool SM2_RenderBeamIcon(int bit, uint32 *out) {
     }
   }
   return false;
+}
+
+// Renders the real pause-menu equipment screen's green wireframe Samus
+// body graphic - see kEquipmentScreenWireframeCmp/Ptrs's own comment - into
+// a 64x136 ARGB8888 buffer (out must be kWireframeTilesW*8 *
+// kWireframeTilesH*8 = 64*136 = 8704 uint32s). Picks the correct one of 4
+// pre-baked variants (no suit / Gravity only / Varia only / both) from the
+// CALLER-supplied equipped_items value (not read directly here) via the
+// same linear-scan match WriteSamusWireframeTilemap itself does. Each
+// tile's own palette index 0 is left transparent.
+bool SM2_RenderSamusWireframe(int equipped_items_value, uint32 *out) {
+  if (!g_rom) return false;
+  memset(out, 0, sizeof(uint32) * kWireframeTilesW * 8 * kWireframeTilesH * 8);
+
+  int key = equipped_items_value & 0x101;
+  int i = 0;
+  // Linear scan matching WriteSamusWireframeTilemap's own loop - the real
+  // ROM table always contains a "both" (0x101) entry to terminate against,
+  // so no explicit bounds check is needed here either (mirrors the
+  // decompiled source exactly).
+  while (kEquipmentScreenWireframeCmp[i] != key) i++;
+
+  const uint16 *src = (const uint16 *)RomPtr_82(kEquipmentScreenWireframePtrs[i]);
+  for (int row = 0; row < kWireframeTilesH; row++) {
+    for (int col = 0; col < kWireframeTilesW; col++) {
+      uint16 entry = *src++;
+      int tile_index = entry & 0x3FF;
+      int palette_row = (entry >> 10) & 7;
+      bool flip_x = (entry & 0x4000) != 0;
+      bool flip_y = (entry & 0x8000) != 0;
+      if (tile_index >= kMapTileCount) continue;
+
+      const uint8 *tile = kMapTileGfx + tile_index * 32;
+      for (int py = 0; py < 8; py++) {
+        int sy = flip_y ? 7 - py : py;
+        for (int px = 0; px < 8; px++) {
+          int sx = flip_x ? 7 - px : px;
+          int ci = Snes4bppColorIndex(tile, sx, sy);
+          if (ci == 0) continue;
+          uint16 color15 = kPauseScreenPalettes[palette_row * 16 + ci];
+          out[(row * 8 + py) * (kWireframeTilesW * 8) + col * 8 + px] = Snes15ToArgb(color15);
+        }
+      }
+    }
+  }
+  return true;
 }
 
 bool SM2_RenderAreaLabel(int area, uint32 *out) {

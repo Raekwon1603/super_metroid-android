@@ -51,6 +51,12 @@ public class GameState {
     public static native boolean renderItemIcon(int bit, int[] out);
     public static native boolean renderBeamIcon(int bit, int[] out);
 
+    // Renders the real pause-menu equipment screen's green wireframe Samus
+    // body graphic into a 64x136 ARGB8888 buffer (out must be length >=
+    // 64*136). equippedItems picks the correct one of 4 suit-state variants -
+    // pass getEquippedItems()'s own return value.
+    public static native boolean renderSamusWireframe(int equippedItems, int[] out);
+
     // Renders the real in-game area-name label graphic (12 tiles x 1 tile =
     // 96x8px) for the given area index. out must be length >= 96*8.
     public static native boolean renderAreaLabel(int area, int[] out);
