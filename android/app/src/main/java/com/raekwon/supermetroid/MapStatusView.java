@@ -53,6 +53,39 @@ public class MapStatusView extends View {
     private static final float ZOOM_BUTTON_STEP = 1.4f;
     private float zoomFactor = DEFAULT_ZOOM;
 
+    // Same idea as zoomFactor/panOffsetX/Y above but for the WORLD view
+    // (all 6 areas): pinching in from the default "fit all explored areas"
+    // framing first zooms further into the world composite itself - so you
+    // can e.g. zoom in on the Crateria/Brinstar/Tourian cluster and still
+    // see all three together - before crossing MAX_WORLD_ZOOM and dropping
+    // into the single-area room view. Mirrors zoomFactor's own MIN/MAX
+    // range and reset-on-transition behavior.
+    private static final float MIN_WORLD_ZOOM = 1f;
+    private static final float MAX_WORLD_ZOOM = 4f;
+    private float worldZoomFactor = MIN_WORLD_ZOOM;
+    private float worldPanOffsetX = 0f, worldPanOffsetY = 0f;
+    // Cached each drawWorldView() call, same purpose as tilesPerPixelX/Y
+    // below but for the world view's own onScroll handling.
+    private float worldTilesPerPixelX = 0f, worldTilesPerPixelY = 0f;
+
+    // Manual pan offset (tile units, added on top of the Samus-centered
+    // baseline), scoped to the CURRENT area's own map only - dragging lets
+    // you look around the rest of the current area without Samus's
+    // position rigidly pinning the view. Deliberately does not cross into
+    // neighboring areas' art (unlike an earlier attempt at this that
+    // rendered from the shared world-composite bitmap instead of the
+    // single-area one): blending two areas' overlapping room layouts
+    // together read as confusing rather than useful, since real Zebes room
+    // data isn't laid out to tile cleanly - see WORLD_AREA_LAYOUT's own
+    // comment on the same overlap. Reset (back to 0,0, i.e. Samus-
+    // centered) on double-tap or on switching area, so returning to the
+    // default view always means "centered on Samus" again.
+    private float panOffsetX = 0f, panOffsetY = 0f;
+    // Cached each drawMap() call: how many map tiles one screen pixel
+    // currently covers, so onScroll can convert a drag's screen-pixel delta
+    // into the same tile units panOffsetX/Y are stored in.
+    private float tilesPerPixelX = 0f, tilesPerPixelY = 0f;
+
     // Explored-tile bounding box for the current area (in tile units, half-
     // open [min,max)), recomputed whenever the explored grid is refreshed.
     // Drives the auto-fit baseline in drawMap so the default view frames
@@ -278,9 +311,21 @@ public class MapStatusView extends View {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
                 if (worldView) {
-                    if (detector.getScaleFactor() > 1f) {
+                    float prospective = worldZoomFactor * detector.getScaleFactor();
+                    if (prospective > MAX_WORLD_ZOOM) {
+                        // Zoomed in past the world view's own range - cross
+                        // over into the single-area room view, centered on
+                        // wherever the world view was currently showing
+                        // (Samus's area) rather than resetting world zoom,
+                        // so pinching in feels continuous across the
+                        // transition instead of snapping back out first.
                         worldView = false;
+                        worldZoomFactor = MIN_WORLD_ZOOM;
+                        worldPanOffsetX = 0f;
+                        worldPanOffsetY = 0f;
                         zoomFactor = MIN_ZOOM;
+                    } else {
+                        worldZoomFactor = Math.max(MIN_WORLD_ZOOM, prospective);
                     }
                     return true;
                 }
@@ -299,6 +344,23 @@ public class MapStatusView extends View {
             public boolean onDoubleTap(MotionEvent e) {
                 worldView = false;
                 zoomFactor = DEFAULT_ZOOM;
+                panOffsetX = 0f;
+                panOffsetY = 0f;
+                worldZoomFactor = MIN_WORLD_ZOOM;
+                worldPanOffsetX = 0f;
+                worldPanOffsetY = 0f;
+                return true;
+            }
+
+            @Override
+            public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+                if (worldView) {
+                    worldPanOffsetX += distanceX * worldTilesPerPixelX;
+                    worldPanOffsetY += distanceY * worldTilesPerPixelY;
+                } else {
+                    panOffsetX += distanceX * tilesPerPixelX;
+                    panOffsetY += distanceY * tilesPerPixelY;
+                }
                 return true;
             }
         });
@@ -370,12 +432,22 @@ public class MapStatusView extends View {
             if (btn.contains(event.getX(), event.getY())) {
                 if (zoomButtonIsIn) {
                     if (worldView) {
-                        worldView = false;
-                        zoomFactor = MIN_ZOOM;
+                        float prospective = worldZoomFactor * ZOOM_BUTTON_STEP;
+                        if (prospective > MAX_WORLD_ZOOM) {
+                            worldView = false;
+                            worldZoomFactor = MIN_WORLD_ZOOM;
+                            worldPanOffsetX = 0f;
+                            worldPanOffsetY = 0f;
+                            zoomFactor = MIN_ZOOM;
+                        } else {
+                            worldZoomFactor = prospective;
+                        }
                     } else {
                         zoomFactor = Math.min(MAX_ZOOM, zoomFactor * ZOOM_BUTTON_STEP);
                     }
-                } else if (!worldView) {
+                } else if (worldView) {
+                    worldZoomFactor = Math.max(MIN_WORLD_ZOOM, worldZoomFactor / ZOOM_BUTTON_STEP);
+                } else {
                     float prospective = zoomFactor / ZOOM_BUTTON_STEP;
                     if (prospective < MIN_ZOOM) {
                         zoomFactor = MIN_ZOOM;
@@ -428,6 +500,13 @@ public class MapStatusView extends View {
         int area = GameState.getArea();
         frameCounter++;
         boolean areaChanged = area != cachedArea;
+        if (areaChanged) {
+            // A pan offset from the previous area's coordinate space is
+            // meaningless once Samus has moved to a different area -
+            // reset back to Samus-centered.
+            panOffsetX = 0f;
+            panOffsetY = 0f;
+        }
         if (areaChanged || frameCounter % REFRESH_INTERVAL == 0) {
             if (GameState.renderAreaMap(area, mapPixels)) {
                 tintAreaPixels(mapPixels, remapAreaForColor(area));
@@ -468,6 +547,13 @@ public class MapStatusView extends View {
         float centerX = (sx >= 0 && sx < GRID_W) ? sx + 0.5f : fitCenterX;
         float centerY = (sy >= 0 && sy < GRID_H) ? sy + 0.5f : fitCenterY;
 
+        // Manual drag pan, added on top of the Samus-centered baseline -
+        // see panOffsetX/Y's field comment. Clamping happens naturally
+        // below via srcLeft/srcTop's own clamp against the map bounds, so
+        // an over-dragged pan just settles at the map edge.
+        centerX += panOffsetX;
+        centerY += panOffsetY;
+
         float viewTilesW = fitTilesW / zoomFactor;
         float viewTilesH = fitTilesH / zoomFactor;
 
@@ -487,6 +573,10 @@ public class MapStatusView extends View {
         float scaleX = (right - left) / (float) srcW;
         float scaleY = (bottom - top) / (float) srcH;
         float cellW = scaleX * 8, cellH = scaleY * 8;
+        // Cache tiles-per-screen-pixel for onScroll to convert drag deltas
+        // by (see tilesPerPixelX/Y's field comment).
+        tilesPerPixelX = 1f / cellW;
+        tilesPerPixelY = 1f / cellH;
 
         if (sx >= 0 && sx < GRID_W && sy >= 0 && sy < GRID_H) {
             float cx = left + ((sx + 0.5f) * 8 - srcLeft) * scaleX;
@@ -549,6 +639,18 @@ public class MapStatusView extends View {
 
     private static int clampInt(int v, int lo, int hi) {
         if (hi < lo) return lo;
+        if (v < lo) return lo;
+        if (v > hi) return hi;
+        return v;
+    }
+
+    // Same as clampInt but for floats, and tolerant of lo > hi (returns
+    // their midpoint instead of misbehaving) - used when the viewport
+    // itself is wider than the canvas (e.g. early game with only one small
+    // area explored so far), where a naive clamp would otherwise force
+    // lo > hi.
+    private static float clampFloat(float v, float lo, float hi) {
+        if (hi < lo) return (lo + hi) / 2f;
         if (v < lo) return lo;
         if (v > hi) return hi;
         return v;
@@ -619,6 +721,11 @@ public class MapStatusView extends View {
     private void enterWorldView() {
         worldView = true;
         worldFrameCounter = 0;
+        panOffsetX = 0f;
+        panOffsetY = 0f;
+        worldZoomFactor = MIN_WORLD_ZOOM;
+        worldPanOffsetX = 0f;
+        worldPanOffsetY = 0f;
         int area = GameState.getArea();
         // Ceres (6) and the unused debug area (7) aren't part of the 6-area
         // world grid - start the round-robin from Crateria in that case.
@@ -753,12 +860,37 @@ public class MapStatusView extends View {
         // the screen border.
         float margin = Math.max(visMaxX - visMinX, visMaxY - visMinY) * 0.06f;
         visMinX -= margin; visMinY -= margin; visMaxX += margin; visMaxY += margin;
-        float canvasW = visMaxX - visMinX, canvasH = visMaxY - visMinY;
+        float fitCenterX = (visMinX + visMaxX) / 2f, fitCenterY = (visMinY + visMaxY) / 2f;
+        float fitCanvasW = visMaxX - visMinX, fitCanvasH = visMaxY - visMinY;
+
+        // worldZoomFactor shrinks the visible window around a pan-adjusted
+        // center (mirrors drawMap's own zoomFactor/panOffsetX/Y handling
+        // for the per-area view) - at MIN_WORLD_ZOOM this covers exactly
+        // the auto-fit region above, same as before this feature existed.
+        float centerX = fitCenterX + worldPanOffsetX;
+        float centerY = fitCenterY + worldPanOffsetY;
+        float canvasW = fitCanvasW / worldZoomFactor;
+        float canvasH = fitCanvasH / worldZoomFactor;
 
         float availW = right - left, availH = bottom - top;
         float scale = Math.min(availW / canvasW, availH / canvasH);
-        float originX = left + (availW - canvasW * scale) / 2f - visMinX * scale;
-        float originY = top + (availH - canvasH * scale) / 2f - visMinY * scale;
+
+        // Clamp the pan-adjusted center so the viewport can't scroll past
+        // the shared canvas's real edges (mirrors drawMap's own srcLeft/Top
+        // clamp against MAP_PX_W/H, just expressed as a center-point clamp
+        // here since drawWorldView scales-to-fit rather than cropping a
+        // source Rect).
+        float halfW = canvasW / 2f, halfH = canvasH / 2f;
+        centerX = clampFloat(centerX, halfW, WORLD_CANVAS_TILES_W - halfW);
+        centerY = clampFloat(centerY, halfH, WORLD_CANVAS_TILES_H - halfH);
+        float viewMinX = centerX - halfW, viewMinY = centerY - halfH;
+
+        float originX = left + (availW - canvasW * scale) / 2f - viewMinX * scale;
+        float originY = top + (availH - canvasH * scale) / 2f - viewMinY * scale;
+        // Cache tiles-per-screen-pixel for onScroll to convert drag deltas
+        // by (see worldTilesPerPixelX/Y's field comment).
+        worldTilesPerPixelX = 1f / scale;
+        worldTilesPerPixelY = 1f / scale;
 
         Rect src = new Rect(0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
         Rect dest = new Rect((int) originX, (int) originY,
