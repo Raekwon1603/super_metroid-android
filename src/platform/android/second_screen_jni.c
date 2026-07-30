@@ -187,6 +187,16 @@ JNIEXPORT jint JNICALL JFN(getMaxPowerBombs)(JNIEnv *env, jclass clazz) {
   return SM2_GetMaxPowerBombs();
 }
 
+JNIEXPORT jint JNICALL JFN(getSelectedAmmo)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_GetSelectedAmmo();
+}
+
+JNIEXPORT void JNICALL JFN(setSelectedAmmo)(JNIEnv *env, jclass clazz, jint index) {
+  (void)env; (void)clazz;
+  SM2_SetSelectedAmmo(index);
+}
+
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 64 * 8) return JNI_FALSE;
@@ -211,5 +221,23 @@ JNIEXPORT jboolean JNICALL JFN(renderMissileIcon)(JNIEnv *env, jclass clazz, jin
   uint32 px[24 * 16];
   if (!SM2_RenderMissileIcon(px)) return JNI_FALSE;
   (*env)->SetIntArrayRegion(env, out, 0, 24 * 16, (jint *)px);
+  return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(renderSuperMissileIcon)(JNIEnv *env, jclass clazz, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 16 * 16) return JNI_FALSE;
+  uint32 px[16 * 16];
+  if (!SM2_RenderSuperMissileIcon(px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 16 * 16, (jint *)px);
+  return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(renderPowerBombIcon)(JNIEnv *env, jclass clazz, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 16 * 16) return JNI_FALSE;
+  uint32 px[16 * 16];
+  if (!SM2_RenderPowerBombIcon(px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 16 * 16, (jint *)px);
   return JNI_TRUE;
 }

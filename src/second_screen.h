@@ -103,6 +103,15 @@ bool SM2_RenderBeamIcon(int bit, uint32 *out);
 // loaded yet.
 bool SM2_RenderMissileIcon(uint32 *out);
 
+// Same idea as SM2_RenderMissileIcon but for the Super Missile / Power Bomb
+// HUD tank icons - each a 2x2-tile (16x16px) glyph (out must be 16*16 = 256
+// uint32s), also decoded from a literal tilemap array in the decompiled
+// source (kHudTilemaps_Missiles22 in second_screen.c, copied from
+// kHudTilemaps_Missiles in sm_80.c), not ROM-only data. Returns false if
+// the ROM isn't loaded yet.
+bool SM2_RenderSuperMissileIcon(uint32 *out);
+bool SM2_RenderPowerBombIcon(uint32 *out);
+
 // ---- items (equipped_items / collected_items bitfields, g_ram+0x9A2/0x9A4) ----
 // Bit values reverse-derived from this decomp's own usage (palette/pose
 // selection, PLM pickup handlers, HUD icon code) - see second_screen.c.
@@ -144,3 +153,20 @@ int SM2_GetSuperMissiles(void);
 int SM2_GetMaxSuperMissiles(void);
 int SM2_GetPowerBombs(void);
 int SM2_GetMaxPowerBombs(void);
+
+// ---- selected ammo (hud_item_index, g_ram+0x9D2) ----
+// The Select-button "currently armed ammo" slot (HandleSwitchingHudSelection
+// in sm_90.c) - a plain index, not a bitfield: 0=none, 1=Missiles,
+// 2=Super Missiles, 3=Power Bombs, 4=Grapple, 5=X-Ray.
+enum {
+  kSM2Ammo_None = 0,
+  kSM2Ammo_Missiles = 1,
+  kSM2Ammo_SuperMissiles = 2,
+  kSM2Ammo_PowerBombs = 3,
+  kSM2Ammo_Grapple = 4,
+  kSM2Ammo_XRay = 5,
+};
+int SM2_GetSelectedAmmo(void);
+// Writes hud_item_index directly - the same effect as pressing Select on
+// the controller until this slot is reached. No-op for out-of-range values.
+void SM2_SetSelectedAmmo(int index);

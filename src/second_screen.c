@@ -14,6 +14,22 @@
 #define kMapGridW 64
 #define kMapGridH 32
 
+// The gameplay HUD (BG3) is a SEPARATE tile graphics/palette bank from the
+// pause-menu screens above - BG3 runs in 2bpp (16 bytes/tile, 4 colors per
+// palette row), not 4bpp like BG1/BG2 (BGMODE=9 is Mode 1 with BG3 on top;
+// Mode 1's BG3 is always 2bpp). Confirmed by direct ROM decode: attempting
+// to decode kHudTilemaps_Missiles22's tile indices as 4bpp against
+// kMapTileGfx/kPauseScreenPalettes produced garbled glyph-noise, not icon
+// art; switching to 2bpp against these addresses (the BG3 tile-graphics
+// DMA source in LoadStdBG3andSpriteTilesClearTilemaps, and the palette DMA
+// source in LoadInitialPalette, both sm_82.c) produced correct, recognizable
+// missile/super-missile/power-bomb tank icon shapes (verified via a
+// standalone Python re-implementation against the real ROM dump before
+// this code was written).
+#define kHudTileGfx ((const uint8 *)RomFixedPtr(0x9ab200))  // BG3 char data, 2bpp
+#define kHudPalette ((const uint16 *)RomFixedPtr(0x9a8000))  // full 256-color initial palette
+#define kHudTileCount 512  // DMA'd region is 0x2000 bytes / 16 bytes-per-2bpp-tile (sm_82.c)
+
 // Equipment-screen icon tables (see LoadEquipmentScreenEquipmentTilemaps in
 // sm_82.c, which redefines these same addresses locally too). Each entry is
 // a small run of tilemap entries: element 0 is a shared blank/spacer tile
@@ -106,6 +122,18 @@ static int Snes4bppColorIndex(const uint8 *tile, int px, int py) {
   return ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1) | (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3);
 }
 
+// SNES 2bpp planar: 16 bytes/tile, 2 bytes per row (bitplanes 0/1
+// interleaved) - half the bitplanes of 4bpp, so only 4 colors per palette
+// row (indices 0-3) instead of 16. Used by the gameplay HUD's BG3 layer -
+// see kHudTileGfx/kHudPalette's own comment for why this differs from the
+// 4bpp pause-menu tile bank.
+static int Snes2bppColorIndex(const uint8 *tile, int px, int py) {
+  int bit = 7 - px;
+  uint8 p0 = tile[py * 2];
+  uint8 p1 = tile[py * 2 + 1];
+  return ((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1);
+}
+
 // SNES BGR555 -> Android's 0xAARRGGBB int format.
 static uint32 Snes15ToArgb(uint16 c) {
   uint32 r5 = c & 0x1F, g5 = (c >> 5) & 0x1F, b5 = (c >> 10) & 0x1F;
@@ -130,31 +158,87 @@ static const uint16 kHudMissileIconTilemap[6] = {
   0x344b, 0x3449, 0x744b, 0x344c, 0x344a, 0x744c,
 };
 
+// kHudTilemaps_Missiles[22] in sm_80.c (a literal tilemap array, not
+// ROM-only data) backs FOUR gameplay-HUD icons, each a different 4-entry
+// slice consumed via AddToTilemapInner's own byte-offset math: Missiles
+// itself is handled separately (a 3x2 icon, AddMissilesToHudTilemap) using
+// entries [0..5]; Supers/PowerBombs/Grapple/X-ray are each a 2x2 icon
+// (AddSuperMissilesToHudTilemap etc, offsets 12/20/28/36 bytes = uint16
+// indices 6/10/14/18). Copied here verbatim - see sm_80.c:1269-1299.
+static const uint16 kHudTilemaps_Missiles22[22] = {
+  0x344b, 0x3449, 0x744b, 0x344c, 0x344a, 0x744c, 0x3434, 0x7434, 0x3435, 0x7435,
+  0x3436, 0x7436, 0x3437, 0x7437, 0x3438, 0x7438, 0x3439, 0x7439, 0x343a, 0x743a,
+  0x343b, 0x743b,
+};
+
 bool SM2_RenderMissileIcon(uint32 *out) {
   if (!g_rom) return false;
   memset(out, 0, sizeof(uint32) * 24 * 16);
   for (int ty = 0; ty < 2; ty++) {
     for (int tx = 0; tx < 3; tx++) {
-      uint16 entry = kHudMissileIconTilemap[ty * 3 + tx];
+      uint16 entry = kHudTilemaps_Missiles22[ty * 3 + tx];
       int tile_index = entry & 0x3FF;
       int palette_row = (entry >> 10) & 7;
       bool flip_x = (entry & 0x4000) != 0;
       bool flip_y = (entry & 0x8000) != 0;
-      if (tile_index >= kMapTileCount) continue;
+      if (tile_index >= kHudTileCount) continue;
 
-      const uint8 *tile = kMapTileGfx + tile_index * 32;
+      const uint8 *tile = kHudTileGfx + tile_index * 16;
       for (int py = 0; py < 8; py++) {
         int sy = flip_y ? 7 - py : py;
         for (int px = 0; px < 8; px++) {
           int sx = flip_x ? 7 - px : px;
-          int ci = Snes4bppColorIndex(tile, sx, sy);
+          int ci = Snes2bppColorIndex(tile, sx, sy);
           if (ci == 0) continue;
-          uint16 color15 = kPauseScreenPalettes[palette_row * 16 + ci];
+          uint16 color15 = kHudPalette[palette_row * 4 + ci];
           out[(ty * 8 + py) * 24 + tx * 8 + px] = Snes15ToArgb(color15);
         }
       }
     }
   }
+  return true;
+}
+
+// Shared by SM2_RenderSuperMissileIcon/SM2_RenderPowerBombIcon: decodes a
+// 2x2-tile (16x16px) HUD icon from a 4-entry slice of
+// kHudTilemaps_Missiles22, laid out [topLeft, topRight, bottomLeft,
+// bottomRight] - matching AddToTilemapInner's own hud_tilemap[v2, v2+1,
+// v2+32, v2+33] placement (a one-row-down wrap, i.e. row-major 2x2).
+static void RenderHud2x2Icon(const uint16 *entries, uint32 *out) {
+  memset(out, 0, sizeof(uint32) * 16 * 16);
+  for (int ty = 0; ty < 2; ty++) {
+    for (int tx = 0; tx < 2; tx++) {
+      uint16 entry = entries[ty * 2 + tx];
+      int tile_index = entry & 0x3FF;
+      int palette_row = (entry >> 10) & 7;
+      bool flip_x = (entry & 0x4000) != 0;
+      bool flip_y = (entry & 0x8000) != 0;
+      if (tile_index >= kHudTileCount) continue;
+
+      const uint8 *tile = kHudTileGfx + tile_index * 16;
+      for (int py = 0; py < 8; py++) {
+        int sy = flip_y ? 7 - py : py;
+        for (int px = 0; px < 8; px++) {
+          int sx = flip_x ? 7 - px : px;
+          int ci = Snes2bppColorIndex(tile, sx, sy);
+          if (ci == 0) continue;
+          uint16 color15 = kHudPalette[palette_row * 4 + ci];
+          out[(ty * 8 + py) * 16 + tx * 8 + px] = Snes15ToArgb(color15);
+        }
+      }
+    }
+  }
+}
+
+bool SM2_RenderSuperMissileIcon(uint32 *out) {
+  if (!g_rom) return false;
+  RenderHud2x2Icon(kHudTilemaps_Missiles22 + 6, out);
+  return true;
+}
+
+bool SM2_RenderPowerBombIcon(uint32 *out) {
+  if (!g_rom) return false;
+  RenderHud2x2Icon(kHudTilemaps_Missiles22 + 10, out);
   return true;
 }
 
@@ -361,3 +445,15 @@ int SM2_GetSuperMissiles(void) { return samus_super_missiles; }
 int SM2_GetMaxSuperMissiles(void) { return samus_max_super_missiles; }
 int SM2_GetPowerBombs(void) { return samus_power_bombs; }
 int SM2_GetMaxPowerBombs(void) { return samus_max_power_bombs; }
+
+int SM2_GetSelectedAmmo(void) { return hud_item_index; }
+
+void SM2_SetSelectedAmmo(int index) {
+  // Same effect as pressing Select on the controller until this slot is
+  // reached (HandleSwitchingHudSelection in sm_90.c) - a direct write is
+  // safe since hud_item_index is a plain selection index (0=none,
+  // 1=Missiles, 2=Supers, 3=PBs, 4=Grapple, 5=X-Ray), not a bitfield, and
+  // the HUD/aim-cursor code re-reads it every frame rather than caching it.
+  if (index < 0 || index > 5) return;
+  hud_item_index = index;
+}

@@ -10,6 +10,7 @@
 SDL2.dll
 /sm.exe
 /glsl-shaders/
+*.sfc
 
 # Android
 android/local.properties

@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -265,6 +266,28 @@ public class MapStatusView extends View {
 
     private static final String LOGO_TEXT = "METROID";
 
+    // Footer tab-bar height and the content panel's own inset margin, both
+    // as a fraction of view height/width - matches the tmc-android dual-
+    // screen mod's look (QUEST/MAP/ITEMS tabs pinned to the bottom, content
+    // area swaps above them) instead of the map bleeding to every screen
+    // edge or duplicating the main screen's own HUD.
+    private static final float HUD_BAR_HEIGHT_FRAC = 0.115f;
+    private static final float PANEL_MARGIN_FRAC = 0.018f;
+
+    // The 3 footer tabs: MAP (the existing live minimap), EQUIPMENT (a
+    // pause-menu-style grid of every collected item/beam, real ROM icons
+    // via GameState.renderItemIcon/renderBeamIcon), AMMO (tap Missile/
+    // Super/Power Bomb to actually select it - writes hud_item_index via
+    // GameState.setSelectedAmmo, same real effect as pressing Select on
+    // the controller). Content area swaps per-tab; the tab bar itself is
+    // always drawn last/on top, pinned to the bottom, same as
+    // tmc-android's PaintTabBar-always-last-every-frame approach.
+    private enum Tab { MAP, EQUIPMENT, AMMO }
+    private Tab currentTab = Tab.MAP;
+    private final RectF[] tabButtonRects = { new RectF(), new RectF(), new RectF() };
+    private int tabTouchPointerId = -1;
+    private int tabTouchDownIndex = -1;
+
     private final Paint bgPaint = new Paint();
     private final Paint mapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint samusRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -275,6 +298,72 @@ public class MapStatusView extends View {
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint panelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint panelBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint hudTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint hudLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tabBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tabActiveBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tabActiveBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint tabLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint slotBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint slotSelectedBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint slotDimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    private final int[] missileIconPixels = new int[24 * 16];
+    private Bitmap missileIconBitmap;
+    private boolean haveMissileIcon = false;
+    private final int[] superMissileIconPixels = new int[16 * 16];
+    private Bitmap superMissileIconBitmap;
+    private boolean haveSuperMissileIcon = false;
+    private final int[] powerBombIconPixels = new int[16 * 16];
+    private Bitmap powerBombIconBitmap;
+    private boolean havePowerBombIcon = false;
+    private final RectF panelRect = new RectF();
+    private final RectF hudBarRect = new RectF();
+
+    // ---- Equipment tab ----
+    // Grouped text-list layout matching SM's real pause-menu "SAMUS"
+    // equipment screen (SUIT/MISC./BOOTS/BEAM boxes listing collected item
+    // names) rather than an icon grid - the equipment-screen ROM icon
+    // strips are wide/short (64x8px tile strips) and don't read well
+    // forced into square grid cells, and the real screen doesn't use icons
+    // for this list anyway. Bit values mirror the kSM2Item_*/kSM2Beam_*
+    // enums in second_screen.h.
+    private static final class EquipGroup {
+        final String title;
+        final int[] bits;
+        final String[] labels;
+        final boolean isBeam;  // which bitfield (collected_items vs collected_beams) this group's bits belong to
+        EquipGroup(String title, int[] bits, String[] labels, boolean isBeam) {
+            this.title = title;
+            this.bits = bits;
+            this.labels = labels;
+            this.isBeam = isBeam;
+        }
+    }
+    private static final EquipGroup EQUIP_SUIT = new EquipGroup("SUIT",
+            new int[] { 0x0001, 0x0020 }, new String[] { "VARIA SUIT", "GRAVITY SUIT" }, false);
+    private static final EquipGroup EQUIP_MISC = new EquipGroup("MISC.",
+            new int[] { 0x0004, 0x1000, 0x0002, 0x0008 },
+            new String[] { "MORPHING BALL", "BOMB", "SPRING BALL", "SCREW ATTACK" }, false);
+    private static final EquipGroup EQUIP_BOOTS = new EquipGroup("BOOTS",
+            new int[] { 0x0100, 0x0200, 0x2000 },
+            new String[] { "HI-JUMP BOOTS", "SPACE JUMP", "SPEED BOOSTER" }, false);
+    private static final EquipGroup EQUIP_BEAM = new EquipGroup("BEAM",
+            new int[] { 0x1000, 0x0002, 0x0001, 0x0004, 0x0008 },
+            new String[] { "CHARGE", "ICE", "WAVE", "SPAZER", "PLASMA" }, true);
+    // Grapple/X-Ray have no box on the real pause screen either (vanilla SM
+    // just shows them via the HUD icon strip, not the SAMUS equipment
+    // page) - omitted here to match, not an oversight.
+
+    // ---- Ammo-select tab ----
+    private static final int[] AMMO_SLOTS = {
+            GameState.AMMO_MISSILES, GameState.AMMO_SUPER_MISSILES, GameState.AMMO_POWER_BOMBS,
+    };
+    private static final String[] AMMO_LABELS = { "MISSILE", "SUPER", "POWER BOMB" };
+    private final RectF[] ammoSlotRects = { new RectF(), new RectF(), new RectF() };
+    private int ammoTouchPointerId = -1;
 
     private final RectF zoomInBtn = new RectF();
     private final RectF zoomOutBtn = new RectF();
@@ -418,6 +507,32 @@ public class MapStatusView extends View {
         zoomBtnIconPaint.setStrokeWidth(4);
         zoomBtnIconPaint.setStrokeCap(Paint.Cap.ROUND);
 
+        panelBgPaint.setColor(Color.rgb(20, 22, 32));
+        panelBorderPaint.setColor(Color.rgb(60, 66, 90));
+        panelBorderPaint.setStyle(Paint.Style.STROKE);
+
+        hudTextPaint.setColor(Color.WHITE);
+        hudTextPaint.setTextAlign(Paint.Align.LEFT);
+        hudTextPaint.setTypeface(Typeface.MONOSPACE);
+        hudLabelPaint.setColor(Color.rgb(150, 155, 175));
+        hudLabelPaint.setTextAlign(Paint.Align.LEFT);
+        hudLabelPaint.setTypeface(Typeface.MONOSPACE);
+
+        tabBgPaint.setColor(Color.rgb(20, 22, 32));
+        tabActiveBgPaint.setColor(Color.rgb(40, 44, 62));
+        tabActiveBorderPaint.setColor(COL_ACCENT);
+        tabActiveBorderPaint.setStyle(Paint.Style.STROKE);
+        tabLabelPaint.setColor(Color.rgb(200, 204, 220));
+        tabLabelPaint.setTextAlign(Paint.Align.CENTER);
+        tabLabelPaint.setTypeface(Typeface.MONOSPACE);
+        tabLabelPaint.setFakeBoldText(true);
+
+        slotBgPaint.setColor(Color.rgb(30, 33, 46));
+        slotSelectedBorderPaint.setColor(COL_ACCENT);
+        slotSelectedBorderPaint.setStyle(Paint.Style.STROKE);
+        slotDimPaint.setColor(Color.rgb(30, 33, 46));
+        slotDimPaint.setAlpha(140);
+
         // The map bitmap is native 8px/tile SNES art scaled way up on
         // screen - keep it crisp/unfiltered (same as the label/room
         // graphics) so pixel edges stay sharp at higher zoom levels instead
@@ -431,14 +546,34 @@ public class MapStatusView extends View {
         worldCompositePixels = new int[WORLD_CANVAS_PX_W * WORLD_CANVAS_PX_H];
         worldPixelOwner = new byte[WORLD_CANVAS_PX_W * WORLD_CANVAS_PX_H];
         java.util.Arrays.fill(worldPixelOwner, (byte) -1);
+
+        missileIconBitmap = Bitmap.createBitmap(24, 16, Bitmap.Config.ARGB_8888);
+        superMissileIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
+        powerBombIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+
+        float hudBarH = h * HUD_BAR_HEIGHT_FRAC;
+        float panelMargin = Math.min(w, h) * PANEL_MARGIN_FRAC;
+        float mapBottom = h - hudBarH;
+        panelRect.set(panelMargin, panelMargin, w - panelMargin, mapBottom - panelMargin * 0.5f);
+        hudBarRect.set(panelMargin, mapBottom + panelMargin * 0.5f, w - panelMargin, h - panelMargin);
+
+        // 3 equal-width tab buttons filling the footer strip, small gaps
+        // between them - same layout idea as tmc-android's PaintTabBar.
+        float tabGap = hudBarRect.width() * 0.012f;
+        float tabW = (hudBarRect.width() - tabGap * 2) / 3f;
+        for (int i = 0; i < 3; i++) {
+            float tx0 = hudBarRect.left + i * (tabW + tabGap);
+            tabButtonRects[i].set(tx0, hudBarRect.top, tx0 + tabW, hudBarRect.bottom);
+        }
+
         float size = Math.min(w, h) * 0.11f;
         float margin = Math.min(w, h) * 0.03f;
-        float right = w - margin, bottom = h - margin;
+        float right = panelRect.right - margin, bottom = panelRect.bottom - margin;
         zoomOutBtn.set(right - size, bottom - size, right, bottom);
         zoomInBtn.set(right - size, bottom - size * 2 - margin * 0.6f, right, bottom - size - margin * 0.6f);
     }
@@ -448,11 +583,58 @@ public class MapStatusView extends View {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
             float x = event.getX(), y = event.getY();
+
+            for (int i = 0; i < tabButtonRects.length; i++) {
+                if (tabButtonRects[i].contains(x, y)) {
+                    tabTouchPointerId = event.getPointerId(0);
+                    tabTouchDownIndex = i;
+                    return true;
+                }
+            }
+
+            if (currentTab == Tab.AMMO) {
+                for (int i = 0; i < ammoSlotRects.length; i++) {
+                    if (ammoSlotRects[i].contains(x, y)) {
+                        ammoTouchPointerId = event.getPointerId(0);
+                        return true;
+                    }
+                }
+            }
+
+            if (currentTab != Tab.MAP) {
+                // Map-only gestures (pinch/pan/double-tap) don't apply on
+                // the other tabs - nothing else to hit-test there.
+                return true;
+            }
+
             if (zoomInBtn.contains(x, y) || zoomOutBtn.contains(x, y)) {
                 zoomButtonPointerId = event.getPointerId(0);
                 zoomButtonIsIn = zoomInBtn.contains(x, y);
                 return true;
             }
+        } else if (action == MotionEvent.ACTION_UP && tabTouchPointerId != -1) {
+            int idx = tabTouchDownIndex;
+            if (idx >= 0 && idx < tabButtonRects.length && tabButtonRects[idx].contains(event.getX(), event.getY())) {
+                currentTab = Tab.values()[idx];
+            }
+            tabTouchPointerId = -1;
+            tabTouchDownIndex = -1;
+            return true;
+        } else if (action == MotionEvent.ACTION_UP && ammoTouchPointerId != -1) {
+            float x = event.getX(), y = event.getY();
+            int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
+            for (int i = 0; i < ammoSlotRects.length; i++) {
+                if (ammoSlotRects[i].contains(x, y)) {
+                    // Only a collected (max > 0) ammo type can actually be
+                    // armed - mirrors the real Select-button handler
+                    // (SwitchToHudHandler_* in sm_90.c), which skips over
+                    // unowned slots rather than letting them be selected.
+                    if (maxCounts[i] > 0) GameState.setSelectedAmmo(AMMO_SLOTS[i]);
+                    break;
+                }
+            }
+            ammoTouchPointerId = -1;
+            return true;
         } else if (action == MotionEvent.ACTION_UP && zoomButtonPointerId != -1) {
             RectF btn = zoomButtonIsIn ? zoomInBtn : zoomOutBtn;
             if (btn.contains(event.getX(), event.getY())) {
@@ -487,9 +669,12 @@ public class MapStatusView extends View {
             return true;
         } else if (action == MotionEvent.ACTION_CANCEL) {
             zoomButtonPointerId = -1;
+            tabTouchPointerId = -1;
+            tabTouchDownIndex = -1;
+            ammoTouchPointerId = -1;
         }
 
-        if (zoomButtonPointerId == -1) {
+        if (currentTab == Tab.MAP && zoomButtonPointerId == -1) {
             scaleDetector.onTouchEvent(event);
             tapDetector.onTouchEvent(event);
         }
@@ -503,21 +688,216 @@ public class MapStatusView extends View {
 
         if (!nativeBroken) {
             try {
-                if (worldView) {
-                    drawWorldView(canvas, 0, 0, w, h);
-                } else {
-                    drawMap(canvas, 0, 0, w, h);
+                float r = Math.min(panelRect.width(), panelRect.height()) * 0.025f;
+                canvas.drawRoundRect(panelRect, r, r, panelBgPaint);
+
+                switch (currentTab) {
+                    case MAP:
+                        if (worldView) {
+                            drawWorldView(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                        } else {
+                            drawMap(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                        }
+                        break;
+                    case EQUIPMENT:
+                        drawEquipmentTab(canvas);
+                        break;
+                    case AMMO:
+                        drawAmmoTab(canvas);
+                        break;
                 }
-                drawZoomButtons(canvas);
+                canvas.drawRoundRect(panelRect, r, r, panelBorderPaint);
+                if (currentTab == Tab.MAP) drawZoomButtons(canvas);
                 if (!GameState.isPlayingLive()) {
                     drawDimOverlay(canvas, w, h);
                 }
+
+                drawTabBar(canvas);
             } catch (UnsatisfiedLinkError e) {
                 nativeBroken = true;
             }
         }
 
         if (isAttachedToWindow()) postInvalidateOnAnimation();
+    }
+
+    private static final String[] TAB_LABELS = { "MAP", "ITEMS", "AMMO" };
+
+    // Persistent 3-button footer tab bar, always drawn last/on top so it
+    // reads as chrome rather than page content - same "content swaps,
+    // chrome persists" approach as tmc-android's PaintTabBar (called every
+    // frame after whichever panel is active). The active tab gets a
+    // highlighted background plus an accent keyline border.
+    private void drawTabBar(Canvas canvas) {
+        for (int i = 0; i < 3; i++) {
+            RectF rect = tabButtonRects[i];
+            boolean active = currentTab.ordinal() == i;
+            float r = rect.height() * 0.22f;
+            canvas.drawRoundRect(rect, r, r, active ? tabActiveBgPaint : tabBgPaint);
+            if (active) {
+                canvas.drawRoundRect(rect, r, r, tabActiveBorderPaint);
+            }
+            tabLabelPaint.setTextSize(rect.height() * 0.4f);
+            float ty = rect.centerY() + tabLabelPaint.getTextSize() * 0.35f;
+            canvas.drawText(TAB_LABELS[i], rect.centerX(), ty, tabLabelPaint);
+        }
+    }
+
+    // Grouped text-list equipment screen - SUIT/MISC./BOOTS boxes on the
+    // left/right (mirroring the real pause screen's layout) plus a BEAM
+    // box, each listing every item in that group with a filled or hollow
+    // bullet marker showing collected/not-collected, matching the
+    // reference photo's own look exactly (no icons - see EQUIP_GROUPS's
+    // comment on why icons were dropped).
+    private void drawEquipmentTab(Canvas canvas) {
+        float pad = panelRect.width() * 0.03f;
+        float left = panelRect.left + pad, right = panelRect.right - pad;
+        float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
+        float colGap = pad * 0.8f;
+        float colW = (right - left - colGap) / 2f;
+
+        // Left column: SUIT then MISC. Right column: BOOTS then BEAM -
+        // mirrors the real pause screen's layout. Box heights are
+        // proportional to their own entry count so a 2-entry SUIT box
+        // isn't the same height as a 4-entry MISC. box.
+        drawEquipColumn(canvas, left, top, colW, bottom - top, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
+        drawEquipColumn(canvas, left + colW + colGap, top, colW, bottom - top, new EquipGroup[] { EQUIP_BOOTS, EQUIP_BEAM });
+    }
+
+    private void drawEquipColumn(Canvas canvas, float x, float top, float w, float h, EquipGroup[] groups) {
+        int collectedItems = GameState.getCollectedItems();
+        int collectedBeams = GameState.getCollectedBeams();
+
+        int totalEntries = 0;
+        for (EquipGroup g : groups) totalEntries += g.bits.length;
+        float gap = h * 0.04f;
+        float unitH = (h - gap * (groups.length - 1)) / totalEntries;
+
+        float y = top;
+        for (EquipGroup g : groups) {
+            int bits = g.isBeam ? collectedBeams : collectedItems;
+            float boxH = unitH * g.bits.length;
+            RectF box = new RectF(x, y, x + w, y + boxH);
+            float r = w * 0.03f;
+            canvas.drawRoundRect(box, r, r, slotBgPaint);
+            canvas.drawRoundRect(box, r, r, panelBorderPaint);
+
+            float titleSize = boxH * (1f / g.bits.length) * 0.4f;
+            hudLabelPaint.setTextAlign(Paint.Align.LEFT);
+            hudLabelPaint.setColor(COL_ACCENT);
+            hudLabelPaint.setTextSize(titleSize);
+            canvas.drawText(g.title, box.left + w * 0.06f, box.top + titleSize * 1.2f, hudLabelPaint);
+
+            float rowH = (boxH - titleSize * 1.6f) / g.bits.length;
+            float rowY = box.top + titleSize * 1.6f;
+            float entrySize = rowH * 0.42f;
+            for (int i = 0; i < g.bits.length; i++) {
+                boolean collected = (bits & g.bits[i]) != 0;
+                float cy = rowY + i * rowH + rowH * 0.65f;
+                float dotR = entrySize * 0.28f;
+                float dotCx = box.left + w * 0.09f, dotCy = cy - entrySize * 0.32f;
+                if (collected) {
+                    canvas.drawCircle(dotCx, dotCy, dotR, slotSelectedBorderPaintFilled());
+                } else {
+                    canvas.drawCircle(dotCx, dotCy, dotR, panelBorderPaint);
+                }
+                hudTextPaint.setTextAlign(Paint.Align.LEFT);
+                hudTextPaint.setColor(collected ? Color.WHITE : Color.rgb(90, 94, 110));
+                hudTextPaint.setTextSize(entrySize);
+                canvas.drawText(g.labels[i], box.left + w * 0.16f, cy, hudTextPaint);
+            }
+            y += boxH + gap;
+        }
+        hudTextPaint.setColor(Color.WHITE);
+    }
+
+    // slotSelectedBorderPaint is a STROKE-style paint (used for the ammo/
+    // equipment box highlight border); the collected-item bullet dot needs
+    // a filled circle in the same accent color, so this returns a small
+    // cached FILL variant instead of allocating a new Paint every frame.
+    private Paint cachedFillAccentPaint;
+    private Paint slotSelectedBorderPaintFilled() {
+        if (cachedFillAccentPaint == null) {
+            cachedFillAccentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            cachedFillAccentPaint.setColor(COL_ACCENT);
+            cachedFillAccentPaint.setStyle(Paint.Style.FILL);
+        }
+        return cachedFillAccentPaint;
+    }
+
+    // Weapon-select screen: tap Missile/Super Missile/Power Bomb to make
+    // it the actively-armed ammo (GameState.setSelectedAmmo writes
+    // hud_item_index directly - the same real effect as pressing Select on
+    // the controller until that slot is reached). The currently-armed slot
+    // is highlighted; slots with zero ammo capacity (not yet collected)
+    // are dimmed and not selectable, matching the real Select-button
+    // behavior of skipping unowned ammo types.
+    private void drawAmmoTab(Canvas canvas) {
+        float pad = panelRect.width() * 0.04f;
+        float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
+        float left = panelRect.left + pad, right = panelRect.right - pad;
+        float gap = pad * 0.6f;
+        float slotW = (right - left - gap * 2) / 3f;
+
+        int[] counts = { GameState.getMissiles(), GameState.getSuperMissiles(), GameState.getPowerBombs() };
+        int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
+        int selected = GameState.getSelectedAmmo();
+
+        if (!haveMissileIcon && GameState.renderMissileIcon(missileIconPixels)) {
+            missileIconBitmap.setPixels(missileIconPixels, 0, 24, 0, 0, 24, 16);
+            haveMissileIcon = true;
+        }
+        if (!haveSuperMissileIcon && GameState.renderSuperMissileIcon(superMissileIconPixels)) {
+            superMissileIconBitmap.setPixels(superMissileIconPixels, 0, 16, 0, 0, 16, 16);
+            haveSuperMissileIcon = true;
+        }
+        if (!havePowerBombIcon && GameState.renderPowerBombIcon(powerBombIconPixels)) {
+            powerBombIconBitmap.setPixels(powerBombIconPixels, 0, 16, 0, 0, 16, 16);
+            havePowerBombIcon = true;
+        }
+        Bitmap[] icons = { missileIconBitmap, superMissileIconBitmap, powerBombIconBitmap };
+        boolean[] haveIcon = { haveMissileIcon, haveSuperMissileIcon, havePowerBombIcon };
+        float[] iconAspect = { 24f / 16f, 1f, 1f };  // missile icon is 24x16, supers/PBs are 16x16
+
+        for (int i = 0; i < 3; i++) {
+            float sx0 = left + i * (slotW + gap);
+            RectF slot = new RectF(sx0, top, sx0 + slotW, bottom);
+            ammoSlotRects[i].set(slot);
+
+            boolean owned = maxCounts[i] > 0;
+            float r = slot.width() * 0.08f;
+            canvas.drawRoundRect(slot, r, r, slotBgPaint);
+            if (owned && selected == AMMO_SLOTS[i]) {
+                canvas.drawRoundRect(slot, r, r, slotSelectedBorderPaint);
+            }
+            if (!owned) {
+                canvas.drawRoundRect(slot, r, r, slotDimPaint);
+            }
+
+            if (haveIcon[i]) {
+                float iconH = slot.height() * 0.3f, iconW = iconH * iconAspect[i];
+                float iconLeft = slot.centerX() - iconW / 2f, iconTop = slot.top + slot.height() * 0.16f;
+                RectF dest = new RectF(iconLeft, iconTop, iconLeft + iconW, iconTop + iconH);
+                if (!owned) mapPaint.setAlpha(70);
+                canvas.drawBitmap(icons[i], null, dest, mapPaint);
+                if (!owned) mapPaint.setAlpha(255);
+            }
+
+            hudLabelPaint.setTextAlign(Paint.Align.CENTER);
+            hudLabelPaint.setColor(owned ? Color.rgb(200, 204, 220) : Color.rgb(90, 94, 110));
+            hudLabelPaint.setTextSize(slot.width() * 0.12f);
+            canvas.drawText(AMMO_LABELS[i], slot.centerX(), slot.top + slot.height() * 0.62f, hudLabelPaint);
+
+            hudTextPaint.setTextAlign(Paint.Align.CENTER);
+            hudTextPaint.setTextSize(slot.width() * 0.14f);
+            hudTextPaint.setColor(owned ? Color.WHITE : Color.rgb(90, 94, 110));
+            String countText = counts[i] + "/" + maxCounts[i];
+            canvas.drawText(countText, slot.centerX(), slot.bottom - slot.height() * 0.12f, hudTextPaint);
+            hudTextPaint.setTextAlign(Paint.Align.LEFT);
+            hudTextPaint.setColor(Color.WHITE);
+            hudLabelPaint.setTextAlign(Paint.Align.LEFT);
+            hudLabelPaint.setColor(Color.rgb(150, 155, 175));
+        }
     }
 
     private void drawMap(Canvas canvas, float left, float top, float right, float bottom) {

@@ -58,6 +58,10 @@ public class GameState {
     // Renders the actual gameplay-HUD missile icon into a 24x16 ARGB8888
     // buffer (out must be length >= 24*16).
     public static native boolean renderMissileIcon(int[] out);
+    // Same, for the Super Missile / Power Bomb HUD tank icons - each a
+    // 16x16 ARGB8888 buffer (out must be length >= 16*16).
+    public static native boolean renderSuperMissileIcon(int[] out);
+    public static native boolean renderPowerBombIcon(int[] out);
 
     public static native int getCollectedItems();
     public static native int getEquippedItems();
@@ -74,4 +78,17 @@ public class GameState {
     public static native int getMaxSuperMissiles();
     public static native int getPowerBombs();
     public static native int getMaxPowerBombs();
+
+    // The Select-button "currently armed ammo" slot: 0=none, 1=Missiles,
+    // 2=Super Missiles, 3=Power Bombs, 4=Grapple, 5=X-Ray. setSelectedAmmo
+    // has the same real effect as pressing Select on the controller until
+    // that slot is reached (no-op for values outside 0-5).
+    public static final int AMMO_NONE = 0;
+    public static final int AMMO_MISSILES = 1;
+    public static final int AMMO_SUPER_MISSILES = 2;
+    public static final int AMMO_POWER_BOMBS = 3;
+    public static final int AMMO_GRAPPLE = 4;
+    public static final int AMMO_XRAY = 5;
+    public static native int getSelectedAmmo();
+    public static native void setSelectedAmmo(int index);
 }
