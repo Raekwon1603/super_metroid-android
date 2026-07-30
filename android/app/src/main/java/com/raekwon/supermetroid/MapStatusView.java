@@ -216,7 +216,6 @@ public class MapStatusView extends View {
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint connectorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final RectF zoomInBtn = new RectF();
     private final RectF zoomOutBtn = new RectF();
@@ -249,7 +248,17 @@ public class MapStatusView extends View {
     // once a tile is drawn, it stays drawn, so there's no per-frame
     // crop/connector mismatch to get out of sync.
     private Bitmap worldCompositeBitmap;
-    private Canvas worldCompositeCanvas;
+    // Per-pixel ownership backing worldCompositeBitmap: since area bboxes
+    // routinely overlap (see WORLD_AREA_LAYOUT's comment - Zebes' room data
+    // was never authored to be globally consistent), redrawing an area's
+    // bitmap on its round-robin turn would otherwise flicker any overlap
+    // zone between whichever two areas' art last happened to draw there.
+    // The first area to ever paint a canvas pixel claims it permanently in
+    // worldPixelOwner (-1 = unclaimed); later areas skip pixels they don't
+    // own (see ensureWorldAreaFresh's manual per-pixel composite), so
+    // overlap zones settle onto one area's art instead of cycling forever.
+    private int[] worldCompositePixels;
+    private byte[] worldPixelOwner;
     private final Bitmap[] worldLabelBitmaps = new Bitmap[6];
     private final boolean[] haveWorldLabel = new boolean[6];
     private final boolean[] worldAreaDrawn = new boolean[6];
@@ -321,9 +330,6 @@ public class MapStatusView extends View {
         zoomBtnIconPaint.setStrokeWidth(4);
         zoomBtnIconPaint.setStrokeCap(Paint.Cap.ROUND);
 
-        connectorPaint.setStrokeWidth(12);
-        connectorPaint.setStrokeCap(Paint.Cap.ROUND);
-
         // The map bitmap is native 8px/tile SNES art scaled way up on
         // screen - bilinear-filter it (unlike the label/room graphics) so
         // it reads as a smooth grid like the in-game pause map instead of
@@ -334,7 +340,9 @@ public class MapStatusView extends View {
         labelBitmap = Bitmap.createBitmap(LABEL_PX_W, LABEL_PX_H, Bitmap.Config.ARGB_8888);
 
         worldCompositeBitmap = Bitmap.createBitmap(WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H, Bitmap.Config.ARGB_8888);
-        worldCompositeCanvas = new Canvas(worldCompositeBitmap);
+        worldCompositePixels = new int[WORLD_CANVAS_PX_W * WORLD_CANVAS_PX_H];
+        worldPixelOwner = new byte[WORLD_CANVAS_PX_W * WORLD_CANVAS_PX_H];
+        java.util.Arrays.fill(worldPixelOwner, (byte) -1);
     }
 
     @Override
@@ -646,14 +654,37 @@ public class MapStatusView extends View {
             if (GameState.areaHasAnyExploredTile(a) && GameState.renderAreaMap(a, mapPixels)) {
                 tintAreaPixels(mapPixels, a);
                 makeUnexploredTransparent(mapPixels);
-                mapBitmap.setPixels(mapPixels, 0, MAP_PX_W, 0, 0, MAP_PX_W, MAP_PX_H);
 
                 float[] l = WORLD_AREA_LAYOUT[a];
                 int declMinX = (int) l[0], declMinY = (int) l[1], declMaxX = (int) l[2], declMaxY = (int) l[3];
-                Rect src = new Rect(declMinX * 8, declMinY * 8, declMaxX * 8, declMaxY * 8);
-                Rect dest = new Rect((int) (l[4] * 8), (int) (l[5] * 8),
-                        (int) (l[4] * 8) + src.width(), (int) (l[5] * 8) + src.height());
-                worldCompositeCanvas.drawBitmap(mapBitmap, src, dest, mapPaint);
+                int srcPx0 = declMinX * 8, srcPy0 = declMinY * 8;
+                int destPx0 = (int) (l[4] * 8), destPy0 = (int) (l[5] * 8);
+                int w = (declMaxX - declMinX) * 8, h = (declMaxY - declMinY) * 8;
+
+                // Manual per-pixel composite instead of a plain blit: area
+                // bboxes routinely overlap (see WORLD_AREA_LAYOUT/
+                // worldPixelOwner's comments), and each area gets redrawn on
+                // its own round-robin turn - a plain drawBitmap would
+                // repaint any overlap zone with whichever area's turn it
+                // currently is, flickering between the two forever. The
+                // first area to ever paint a given canvas pixel claims it
+                // permanently in worldPixelOwner; later areas skip pixels
+                // they don't own, so overlap zones settle instead of
+                // fighting.
+                for (int y = 0; y < h; y++) {
+                    int destRow = (destPy0 + y) * WORLD_CANVAS_PX_W + destPx0;
+                    int srcRow = (srcPy0 + y) * MAP_PX_W + srcPx0;
+                    for (int x = 0; x < w; x++) {
+                        int srcPixel = mapPixels[srcRow + x];
+                        if ((srcPixel >>> 24) == 0) continue;  // transparent = unexplored
+                        int destIdx = destRow + x;
+                        byte owner = worldPixelOwner[destIdx];
+                        if (owner != -1 && owner != a) continue;  // claimed by a different area
+                        worldCompositePixels[destIdx] = srcPixel;
+                        worldPixelOwner[destIdx] = (byte) a;
+                    }
+                }
+                worldCompositeBitmap.setPixels(worldCompositePixels, 0, WORLD_CANVAS_PX_W, 0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
                 worldAreaDrawn[a] = true;
 
                 // Bake in any connector whose both endpoints are now drawn,
@@ -664,7 +695,10 @@ public class MapStatusView extends View {
                     float[] c = WORLD_CONNECTORS[i];
                     int areaA = (int) c[0], areaB = (int) c[3];
                     if (worldAreaDrawn[areaA] && worldAreaDrawn[areaB]) {
-                        drawWorldConnector(worldCompositeCanvas, c);
+                        float gap = (float) Math.hypot(c[1] - c[4], c[2] - c[5]);
+                        if (gap <= CONNECTOR_MAX_GAP_TILES) {
+                            drawWorldConnector(c);
+                        }
                         worldConnectorDrawn[i] = true;
                     }
                 }
@@ -779,7 +813,26 @@ public class MapStatusView extends View {
     // stroke. Width matches CONNECTOR_HALF_WIDTH*2 in room-tile scale.
     private static final float CONNECTOR_HALF_WIDTH = 5f;
 
-    private void drawWorldConnector(Canvas canvas, float[] c) {
+    // Several WORLD_CONNECTORS rows are secondary/duplicate doors between
+    // two areas already linked elsewhere in the table by an exact (zero-
+    // gap) connection under the BFS spanning-tree layout - their own two
+    // endpoints can land several tiles apart despite being real doors,
+    // since only one connection per area pair got to anchor that area's
+    // position. Drawn as a long straight bridge across mostly-unrelated
+    // canvas space, those read as a visibly wrong stray line rather than a
+    // corridor - better to omit them than fake a connection the layout
+    // doesn't actually support visually.
+    private static final float CONNECTOR_MAX_GAP_TILES = 3f;
+
+    // Rasterizes directly into worldCompositePixels (the same backing array
+    // ensureWorldAreaFresh's per-pixel composite writes into) rather than
+    // drawing via Canvas onto worldCompositeBitmap - keeping every write to
+    // the composite on one path means there's no way for the two to fall
+    // out of sync. If this drew via Canvas instead, a later area's redraw
+    // (ensureWorldAreaFresh re-pushing worldCompositePixels wholesale via
+    // setPixels) would silently erase whatever Canvas.drawLine had painted,
+    // since the array never learned about those pixels.
+    private void drawWorldConnector(float[] c) {
         int areaA = (int) c[0], areaB = (int) c[3];
         float ax = c[1] * 8, ay = c[2] * 8;
         float bx = c[4] * 8, by = c[5] * 8;
@@ -790,16 +843,46 @@ public class MapStatusView extends View {
         // corridor has the same "dark floor, lit border" read as actual
         // decoded map rooms - a flat line by contrast looks like a UI
         // annotation, not part of the level geometry.
-        connectorPaint.setStyle(Paint.Style.STROKE);
-        connectorPaint.setStrokeWidth(CONNECTOR_HALF_WIDTH * 2);
-        connectorPaint.setColor(darken(blend, 0.35f));
-        canvas.drawLine(ax, ay, bx, by, connectorPaint);
+        int fillColor = darken(blend, 0.35f) | 0xFF000000;
+        int borderColor = darken(blend, 0.6f) | 0xFF000000;
+        rasterizeThickLine(ax, ay, bx, by, CONNECTOR_HALF_WIDTH, fillColor);
+        rasterizeThickLine(ax, ay, bx, by, CONNECTOR_HALF_WIDTH - 1.5f, borderColor);
+        worldCompositeBitmap.setPixels(worldCompositePixels, 0, WORLD_CANVAS_PX_W, 0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
+    }
 
-        connectorPaint.setStrokeWidth(CONNECTOR_HALF_WIDTH * 2 - 3f);
-        connectorPaint.setColor(darken(blend, 0.6f));
-        canvas.drawLine(ax, ay, bx, by, connectorPaint);
+    // Fills every pixel within `halfWidth` of the segment (ax,ay)-(bx,by)
+    // with `color`, directly into worldCompositePixels - a plain-array
+    // equivalent of Canvas.drawLine(..., Paint.Cap.ROUND) with a solid
+    // stroke, scanning the segment's bounding box and testing each pixel's
+    // distance to the segment (point-to-segment distance via clamped
+    // projection). Connector pixels aren't tracked in worldPixelOwner since
+    // they're not owned by either endpoint area - they're always redrawn
+    // fresh each time this is called (once per connector, ever, since
+    // ensureWorldAreaFresh only calls this the first time both endpoint
+    // areas are drawn).
+    private void rasterizeThickLine(float ax, float ay, float bx, float by, float halfWidth, int color) {
+        int minX = Math.max(0, (int) Math.floor(Math.min(ax, bx) - halfWidth));
+        int maxX = Math.min(WORLD_CANVAS_PX_W - 1, (int) Math.ceil(Math.max(ax, bx) + halfWidth));
+        int minY = Math.max(0, (int) Math.floor(Math.min(ay, by) - halfWidth));
+        int maxY = Math.min(WORLD_CANVAS_PX_H - 1, (int) Math.ceil(Math.max(ay, by) + halfWidth));
 
-        connectorPaint.setStyle(Paint.Style.FILL);
+        float dx = bx - ax, dy = by - ay;
+        float lenSq = dx * dx + dy * dy;
+        float hw2 = halfWidth * halfWidth;
+
+        for (int y = minY; y <= maxY; y++) {
+            int row = y * WORLD_CANVAS_PX_W;
+            for (int x = minX; x <= maxX; x++) {
+                float px = x + 0.5f, py = y + 0.5f;
+                float t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0f;
+                t = Math.max(0f, Math.min(1f, t));
+                float cx = ax + t * dx, cy = ay + t * dy;
+                float ddx = px - cx, ddy = py - cy;
+                if (ddx * ddx + ddy * ddy <= hw2) {
+                    worldCompositePixels[row + x] = color;
+                }
+            }
+        }
     }
 
     // Multiplies each RGB channel by `factor` (0..1), darkening a color
