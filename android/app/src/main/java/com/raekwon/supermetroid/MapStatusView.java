@@ -173,6 +173,32 @@ public class MapStatusView extends View {
             {11, 9, 22, 22, 9.07f, 13.00f},  // Tourian
     };
 
+    // Per-area declared-bbox tile counts, used as a static ownership
+    // tiebreaker in ensureWorldAreaFresh's per-pixel composite: within an
+    // overlap zone between two areas' declared boxes (these overlaps are
+    // real, not a bug - see WORLD_AREA_LAYOUT's own comment), the area with
+    // the SMALLER declared box always wins, regardless of which one
+    // happened to explore/draw there first. Without this, "first area to
+    // draw a pixel claims it forever" (worldPixelOwner's original rule)
+    // lets a small, fully-enclosed area like Tourian get swallowed by a
+    // sprawling area like Brinstar that merely overlaps its territory by
+    // coordinate coincidence (Tourian's 11x13 box overlaps Brinstar's by
+    // 11x10 - 110 of its own 143 tiles): if enough of Brinstar gets
+    // explored before Tourian is ever visited, most of Tourian's own
+    // declared box can already be claimed by the time Tourian tries to
+    // draw there, and it never gets a chance to reclaim its own footprint.
+    // Smaller-box-wins fixes this permanently and order-independently -
+    // Wrecked Ship (120 tiles) and Tourian (143) are the two smallest and
+    // most likely to otherwise get swallowed by Crateria (969) or Brinstar
+    // (1060), the two largest.
+    private static final float[] AREA_BBOX_TILES = new float[6];
+    static {
+        for (int a = 0; a < 6; a++) {
+            float[] l = WORLD_AREA_LAYOUT[a];
+            AREA_BBOX_TILES[a] = (l[2] - l[0]) * (l[3] - l[1]);
+        }
+    }
+
     // Distinct accent color per area (roughly matching each area's own
     // in-game color identity) so the labels stay tellable apart even before
     // the underlying map art's own colors register.
@@ -786,7 +812,13 @@ public class MapStatusView extends View {
                         if ((srcPixel >>> 24) == 0) continue;  // transparent = unexplored
                         int destIdx = destRow + x;
                         byte owner = worldPixelOwner[destIdx];
-                        if (owner != -1 && owner != a) continue;  // claimed by a different area
+                        // Smaller-box-wins tiebreak (see AREA_BBOX_TILES's
+                        // comment) - only skip this pixel if it's already
+                        // claimed by a different area with an equal or
+                        // smaller declared box than ours; a larger area
+                        // can still be preempted by a smaller one drawing
+                        // later.
+                        if (owner != -1 && owner != a && AREA_BBOX_TILES[a] >= AREA_BBOX_TILES[owner]) continue;
                         worldCompositePixels[destIdx] = srcPixel;
                         worldPixelOwner[destIdx] = (byte) a;
                     }
