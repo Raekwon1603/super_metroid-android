@@ -331,10 +331,10 @@ public class MapStatusView extends View {
         zoomBtnIconPaint.setStrokeCap(Paint.Cap.ROUND);
 
         // The map bitmap is native 8px/tile SNES art scaled way up on
-        // screen - bilinear-filter it (unlike the label/room graphics) so
-        // it reads as a smooth grid like the in-game pause map instead of
-        // going visibly blocky at higher zoom levels.
-        mapPaint.setFilterBitmap(true);
+        // screen - keep it crisp/unfiltered (same as the label/room
+        // graphics) so pixel edges stay sharp at higher zoom levels instead
+        // of going soft from bilinear interpolation.
+        mapPaint.setFilterBitmap(false);
 
         mapBitmap = Bitmap.createBitmap(MAP_PX_W, MAP_PX_H, Bitmap.Config.ARGB_8888);
         labelBitmap = Bitmap.createBitmap(LABEL_PX_W, LABEL_PX_H, Bitmap.Config.ARGB_8888);
