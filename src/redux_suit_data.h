@@ -342,3 +342,36 @@ static const uint16 kReduxSuitTilemaps[4][136] = {
   0x0437,0x0438,0x0439,0x0000,0x0000,0x4439,0x0473,0x4437,
 },
 };
+
+// Live suit-color palette for the equipment screen's main body tiles
+// (local palette-row index kReduxSuitBodyPaletteRow within
+// kReduxSuitPalette above - all 4 tilemap variants overwhelmingly use this
+// one row for the suit body, ~100 of ~135 cells each). Ported from the
+// "Menu Colored Samus" ROM hack (Super-Metroid-Redux's own
+// ControlFreakProjectBase sibling patch, NOT the same DCMapPatch.asm the
+// tilemap/tileset data above came from - a separate, additional patch this
+// project's earlier extraction pass missed entirely, which is why every
+// variant rendered in flat Power Suit orange at first). That hack
+// overwrites WRAM $7EC020 (a live CGRAM-DMA staging buffer, row 1 within
+// its own $7EC000 base - the SAME row 1 the tilemap already points its
+// suit-body tiles at) with one of these 3 fixed 16-color palettes each
+// frame, chosen by equipped_items bit 0x0001 (Varia) / 0x0020 (Gravity) -
+// Gravity checked first, matching how it visually overrides Varia when
+// both are worn. Values are the literal `dw` data from that hack's own
+// ASM source (exact, not re-extracted from a ROM - the ROM extraction
+// path is what got the color wrong the first time, since a static ROM
+// dump only ever holds whichever ONE of these got DMA'd there last).
+#define kReduxSuitBodyPaletteRow 1
+
+static const uint16 kReduxSuitPalettePower[16] = {
+  0x2003,0x0BB1,0x1EA9,0x0145,0x2B5D,0x3DB3,0x292E,0x1486,
+  0x1A99,0x1069,0x0152,0x0000,0x14DB,0x2B5D,0x7FFF,0x0152,
+};
+static const uint16 kReduxSuitPaletteVaria[16] = {
+  0x2003,0x0BB1,0x1EA9,0x0145,0x3F7F,0x3DB3,0x292E,0x1486,
+  0x1A1D,0x1069,0x0152,0x0000,0x14DB,0x2B5D,0x7FFF,0x14F0,
+};
+static const uint16 kReduxSuitPaletteGravity[16] = {
+  0x2003,0x0BB1,0x1EA9,0x0145,0x5DFF,0x3DB3,0x292E,0x1486,
+  0x6915,0x1069,0x0152,0x0000,0x14DB,0x2B5D,0x7FFF,0x38AB,
+};

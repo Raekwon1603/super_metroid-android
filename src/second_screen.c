@@ -383,10 +383,15 @@ bool SM2_RenderSamusWireframe(int equipped_items_value, uint32 *out) {
 // using the "Redux Suit" full-color art (redux_suit_data.h - extracted
 // directly from the real, pre-built Super-Metroid-Redux ROM, see that
 // header's own comment) instead of vanilla's flat green wireframe. Redux
-// kept the exact same 4-variant selection scheme as vanilla
-// (key = equipped_items & 0x101, order: none/Gravity/Varia/both - see
-// redux_suit_data.h), so the variant index is just that same key's linear
-// position, no separate lookup table needed for this data.
+// kept the exact same 4-variant tilemap selection scheme as vanilla
+// (key = equipped_items & 0x101, order: none/Gravity/Varia/both) for the
+// sprite's POSE (e.g. Space Jump's raised-arms variant) - color is a
+// SEPARATE, additional live palette swap on top of whichever pose tilemap
+// is selected (see kReduxSuitBodyPaletteRow's own comment): row 1 (the
+// suit body's own palette row in every pose variant) gets overridden with
+// one of 3 fixed suit-color palettes based on equipped_items bit 0x0001
+// (Varia) / 0x0020 (Gravity) - checked Gravity-first, matching how Gravity
+// visually overrides Varia in-game when both are equipped.
 bool SM2_RenderReduxSuit(int equipped_items_value, uint32 *out) {
   memset(out, 0, sizeof(uint32) * kWireframeTilesW * 8 * kWireframeTilesH * 8);
 
@@ -395,6 +400,10 @@ bool SM2_RenderReduxSuit(int equipped_items_value, uint32 *out) {
   int variant = 0;
   while (variant < 4 && kKeys[variant] != key) variant++;
   if (variant == 4) variant = 0;
+
+  const uint16 *body_palette = kReduxSuitPalettePower;
+  if (equipped_items_value & kSM2Item_Gravity) body_palette = kReduxSuitPaletteGravity;
+  else if (equipped_items_value & kSM2Item_Varia) body_palette = kReduxSuitPaletteVaria;
 
   const uint16 *src = kReduxSuitTilemaps[variant];
   for (int row = 0; row < kWireframeTilesH; row++) {
@@ -413,7 +422,8 @@ bool SM2_RenderReduxSuit(int equipped_items_value, uint32 *out) {
           int sx = flip_x ? 7 - px : px;
           int ci = Snes4bppColorIndex(tile, sx, sy);
           if (ci == 0) continue;
-          uint16 color15 = kReduxSuitPalette[palette_row * 16 + ci];
+          uint16 color15 = palette_row == kReduxSuitBodyPaletteRow
+              ? body_palette[ci] : kReduxSuitPalette[palette_row * 16 + ci];
           out[(row * 8 + py) * (kWireframeTilesW * 8) + col * 8 + px] = Snes15ToArgb(color15);
         }
       }
