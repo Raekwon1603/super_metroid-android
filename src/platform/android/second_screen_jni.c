@@ -292,3 +292,4 @@ JNIEXPORT jboolean JNICALL JFN(renderCurrentRoomArt)(JNIEnv *env, jclass clazz, 
   (*env)->SetIntArrayRegion(env, outDims, 0, 2, dims);
   return JNI_TRUE;
 }
+

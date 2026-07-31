@@ -529,20 +529,31 @@ void SM2_SetSelectedAmmo(int index) {
 
 // ---- Real room background art (not the schematic pause-map tiles above) ----
 //
-// Renders the CURRENT room's actual BG1 (+BG2 if present) tilemap, exactly
-// as the real game draws it during play - not the abstract colored-
-// rectangle pause-map representation SM2_RenderAreaMap produces. This is
-// possible with no reverse-engineering of room-state-select logic at all:
-// by the time a room has finished loading, the real game has ALREADY
-// walked that logic itself (LoadRoomHeader/LoadStateHeader, sm_82.c) and
-// left the results sitting in plain, already-decompressed RAM:
+// Renders the CURRENT room's actual BG1 tilemap, exactly as the real game
+// draws it during play - not the abstract colored-rectangle pause-map
+// representation SM2_RenderAreaMap produces. This is possible with no
+// reverse-engineering of room-state-select logic at all: by the time a
+// room has finished loading, the real game has ALREADY walked that logic
+// itself (LoadRoomHeader/LoadStateHeader, sm_82.c) and left the results
+// sitting in plain, already-decompressed RAM:
 //   - level_data (g_ram+0x10002) = the room's BG1 tilemap
-//   - custom_background (right after level_data + BTS) = BG2, if present
 //   - tile_table (g_ram+0xA000) = the combined 1024-entry CRE+room
 //     metatile table (indices 0-255 CRE, 256-1023 room-specific)
 //   - room_width_in_blocks/room_height_in_blocks = the room's real size
 // All of this is read-only here - never written - so it's safe to read
 // from the JNI/UI thread without disturbing the running game.
+//
+// NOTE: this deliberately does NOT draw custom_background (the bytes
+// right after BG1+BTS in the same decompressed level-data blob) as a
+// second visual layer. An earlier version of this function did, on the
+// assumption it was BG2 - but custom_background is never DMA'd to BG2
+// VRAM or drawn anywhere in this decomp during normal gameplay; its only
+// reader is the pause-menu map's boss-icon overlay code, which pulls
+// fixed, oddly-specific byte offsets out of it for an unrelated purpose.
+// Compositing it as a background fabricates visible content the game
+// never actually shows - confirmed on a Tourian recharge-capsule room,
+// whose "BG2" decoded to real, structured-looking (but not-drawn) tilemap
+// words that rendered as a visibly duplicated tube next to the real one.
 //
 // The one piece NOT already sitting in plain RAM is the 8x8 tile PIXEL
 // graphics themselves (SNES VRAM isn't emulated as a flat readable buffer
@@ -562,27 +573,64 @@ void SM2_SetSelectedAmmo(int index) {
 // boundary, wrong ci==0 transparency rule) before this port.
 #define kGfxSplit 640  // tile index < 640 = room-specific graphics, >= 640 = CRE (offset by 640) - fixed VRAM convention, NOT derived from either blob's size (sm_82.c:4202-4210)
 
+// Each scratch buffer below is immediately followed by a canary region,
+// filled with a distinctive byte before every DecompressToMem call and
+// checked afterward by DecompressBoundsOk() - DecompressToMem (sm_80.c)
+// has NO bounds checking at all, so an undersized destination doesn't
+// fail loudly, it silently keeps writing into whatever static data
+// happens to sit next in memory. This bit the room-art renderer twice
+// already (first with s_level_data_buf sized 0x8000, too small for
+// Crateria's Landing Site; then again sized to exactly match the real
+// game's own level_data reservation, which turned out to be 2 bytes short
+// of Big Pink's real worst case) - both times the overflow corrupted
+// g_snes (sm_cpu_infra.c), crashing the separate SDL emulation thread on
+// its very next frame. The canary can't prevent a large enough overflow
+// from reaching past it into real data, but it turns "silent heap
+// corruption sometime later, symptom nowhere near the cause" into an
+// immediate, attributable "false return from this function" the moment
+// any of these buffers turns out to be undersized again.
+#define kCanarySize 256
+#define kCanaryByte 0x5A
+static bool DecompressBoundsOk(const uint8 *canary) {
+  for (int i = 0; i < kCanarySize; i++) {
+    if (canary[i] != kCanaryByte) return false;
+  }
+  return true;
+}
+
 // Scratch decompression buffers - room tile graphics can run up to several
 // hundred tiles (32 bytes/tile); sized generously above any real room's
 // needs. Static (not stack) since these are too large to put on the stack
 // safely, matching the g_map_px precedent in second_screen_jni.c.
 static uint8 s_room_tiles_buf[0x8000];
+static uint8 s_room_tiles_canary[kCanarySize];
 static uint8 s_cre_tiles_buf[0x8000];
+static uint8 s_cre_tiles_canary[kCanarySize];
 
-// Level-data blob, decompressed fresh here rather than trusting g_ram's own
-// level_data/custom_background - see SM2_RenderCurrentRoomArt's own
-// comment for why: the real game's memcpy for custom_background always
-// copies `size` bytes starting right after BG1+BTS in this SAME
-// decompressed blob, regardless of whether that data is real BG2 content
-// or past-the-end leftover bytes from whatever used this buffer last (a
-// room with no real BG2 layer has a decompressed blob that ends right
-// after BTS - confirmed for Morph Ball Room, whose blob is exactly
-// 2+size+size/2 bytes long, no room left for a BG2 section at all). We
-// need the blob's own total decompressed length to tell real BG2 apart
-// from that leftover-byte case, which the real game itself doesn't keep
-// around once parsed - so decompress independently here, into our own
-// buffer, purely to recover that length safely.
-static uint8 s_level_data_buf[0x8000];
+// Level-data blob (BG1 tilemap + BTS collision data), decompressed fresh
+// here via the real DecompressToMem rather than trusting g_ram's own
+// level_data (which this decomp's normal room-load path already
+// populates, but re-decompressing our own copy keeps this function
+// self-contained and independent of when/whether the caller's read races
+// the game's own room-load sequence).
+//
+// Sized well above vanilla SM's single largest room by cell count - Big
+// Pink (Brinstar), w=5 h=10 screens = 80x160 blocks = 12800 metatile
+// cells, needs 2 + size + size/2 = 2 + 25600 + 12800 = 38402 bytes for
+// BG1+BTS alone (no BG2). The real game's own level_data reservation
+// (g_ram+0x10002 to custom_background at g_ram+0x19602 = exactly 0x9600 =
+// 38400 bytes) is NOT safe to copy here - it's 2 bytes short of Big
+// Pink's own real requirement, confirmed by a repro crash surviving an
+// earlier fix that used that exact size. DecompressToMem has NO bounds
+// checking at all (sm_80.c), so an undersized buffer here doesn't fail
+// loudly - it silently writes past the end into whatever static data
+// happens to sit next in memory, which on this build corrupted g_snes
+// (sm_cpu_infra.c) closely enough to crash the SDL thread on its very
+// next frame. Rounded up to 0x10000 (65536) for real margin instead of
+// hugging the exact known worst case, since a future ROM hack or a room
+// this analysis missed could need a little more.
+static uint8 s_level_data_buf[0x10000];
+static uint8 s_level_data_canary[kCanarySize];
 
 // The room's own live palette (decompressed from tileset_compr_palette_ptr,
 // NOT kPauseScreenPalettes - that fixed 0xb6f000 bank is the PAUSE-MENU
@@ -591,7 +639,9 @@ static uint8 s_level_data_buf[0x8000];
 // distorted look on first render). 256 colors x 2 bytes, same as every
 // other palette decode in this file - set once per SM2_RenderCurrentRoomArt
 // call, read by RenderRoomSubtile via this file-scope pointer rather than
-// threading it through every call in the composite chain.
+// threading it through every call in the composite chain. Always exactly
+// 256 entries (hardware-fixed SNES palette size), so no canary needed -
+// unlike the other three buffers, its size can't vary with room content.
 static uint16 s_room_palette[256];
 
 // Renders one 8x8 subtile (from a TileTable corner word) into out at
@@ -683,7 +733,19 @@ static void CompositeRoomLayer(uint32 *out, int out_w, int out_h, const uint16 *
 // yet or no room is currently loaded.
 bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used, int *out_h_used) {
   if (!g_rom) return false;
+  // Guard against calling this outside real gameplay (title/file-select,
+  // intro cinematic, demo attract-mode, etc) - during those, room_index/
+  // room_width_in_blocks can hold leftover or hardcoded placeholder values
+  // (e.g. CinematicFunction_Intro_Initial in sm_8b.c sets
+  // room_width_in_blocks=16 unconditionally for the Ceres intro) while
+  // tileset_tiles_pointer/room_compr_level_data_ptr are still 0 or garbage
+  // - decompressing from a garbage ROM pointer here previously corrupted
+  // memory badly enough to crash the separate SDL emulation thread shortly
+  // after, on a brand new save file.
+  if (!SM2_IsPlayingLive()) return false;
   if (room_width_in_blocks <= 0 || room_height_in_blocks <= 0) return false;
+  if (Load24(&tileset_tiles_pointer) == 0) return false;
+  if (Load24(&room_compr_level_data_ptr) == 0) return false;
 
   int room_px_w = room_width_in_blocks * 16;
   int room_px_h = room_height_in_blocks * 16;
@@ -691,6 +753,18 @@ bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used
   *out_h_used = room_px_h < out_h ? room_px_h : out_h;
 
   memset(out, 0, sizeof(uint32) * (size_t)out_w * out_h);
+
+  // Locked for the whole decompress+composite sequence below, not just
+  // the DecompressToMem calls: CompositeRoomLayer also reads tile_table
+  // (g_ram+0xA000), which the game's OWN room-load code populates via its
+  // own DecompressToMem calls - holding the lock the whole time keeps
+  // every read in this function consistent with a single point in the
+  // game's timeline, not torn across a concurrent room transition.
+  SM2_LockGameState();
+
+  memset(s_room_tiles_canary, kCanaryByte, kCanarySize);
+  memset(s_cre_tiles_canary, kCanaryByte, kCanarySize);
+  memset(s_level_data_canary, kCanaryByte, kCanarySize);
 
   // Room-specific + CRE tile GRAPHICS (not in plain RAM - VRAM isn't
   // emulated as a flat buffer here - so decompress from ROM via the same
@@ -704,45 +778,37 @@ bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used
   // Tourian metal rendering as cool pink/gray).
   DecompressToMem(Load24(&tileset_compr_palette_ptr), (uint8 *)s_room_palette);
 
-  // Decompress level_data fresh into our own buffer (rather than trusting
-  // g_ram's own level_data/custom_background) purely to recover the
-  // blob's real total length, which the real game itself discards once
-  // parsed - see s_level_data_buf's own comment for why this matters (a
-  // room with no real BG2 layer has custom_background populated from
-  // past-the-end leftover bytes, not real "no BG2" data, if read
-  // unconditionally from g_ram). Sentinel-fill first so we can detect how
-  // far real decompressed data actually reached: DecompressToMem has no
-  // return value, so this is the only way to recover its output length
-  // without modifying the function itself.
-  static const uint8 kSentinel = 0xA5;
-  memset(s_level_data_buf, kSentinel, sizeof(s_level_data_buf));
+  // Decompress level_data fresh into our own buffer, same as the real
+  // game's own LoadLevelDataAndOtherThings (sm_82.c) - only the BG1
+  // tilemap + BTS collision data are used here. The bytes that follow
+  // (what the real game copies into custom_background) are NOT a second
+  // visual layer: custom_background is never DMA'd to BG2 VRAM or drawn
+  // during normal gameplay anywhere in this decomp - its only reader is
+  // the pause-menu map's boss-icon overlay code, which pulls fixed-offset
+  // bytes out of it for an unrelated purpose. Treating it as a real BG2
+  // background (an earlier version of this function did) fabricates
+  // visible content that the game never actually shows, producing
+  // duplicate-looking geometry (confirmed on a Tourian recharge-capsule
+  // room, whose "BG2" decoded to a real, structured-looking tilemap that
+  // was nonetheless not part of the room's actual visual).
   DecompressToMem(Load24(&room_compr_level_data_ptr), s_level_data_buf);
+
+  // Any of these buffers overflowing means real, unrelated heap/static
+  // data past it just got clobbered - bail out now rather than composite
+  // from (and let the caller display) a render that's already coincided
+  // with memory corruption elsewhere. See s_level_data_buf's own comment
+  // for the two real crashes this exact failure mode already caused.
+  if (!DecompressBoundsOk(s_room_tiles_canary) ||
+      !DecompressBoundsOk(s_cre_tiles_canary) ||
+      !DecompressBoundsOk(s_level_data_canary)) {
+    SM2_UnlockGameState();
+    return false;
+  }
 
   int grid_w = room_width_in_blocks, grid_h = room_height_in_blocks;
   int n_words = grid_w * grid_h;
-  int size = s_level_data_buf[0] | (s_level_data_buf[1] << 8);  // BG1's own byte size (== room_size_in_blocks)
-  int bg2_offset = 2 + size + (size >> 1);
-  // Check several bytes spread across the BG2 region rather than just one -
-  // a real decompressed BG2 blob could coincidentally end in the sentinel
-  // byte value, and a partially-written region (decompression stopping
-  // mid-way for some other reason) should also read as "no real BG2" here.
-  bool has_bg2 = bg2_offset + size <= (int)sizeof(s_level_data_buf);
-  if (has_bg2) {
-    int non_sentinel_count = 0;
-    for (int k = 0; k < 8; k++) {
-      int check_off = bg2_offset + (size * k) / 8;
-      if (check_off < (int)sizeof(s_level_data_buf) && s_level_data_buf[check_off] != kSentinel) {
-        non_sentinel_count++;
-      }
-    }
-    has_bg2 = non_sentinel_count >= 4;  // majority of sampled bytes were actually written
-  }
-
   const uint16 *bg1_words = (const uint16 *)(s_level_data_buf + 2);
-  if (has_bg2) {
-    const uint16 *bg2_words = (const uint16 *)(s_level_data_buf + bg2_offset);
-    CompositeRoomLayer(out, out_w, out_h, bg2_words, n_words, grid_w, grid_h);
-  }
   CompositeRoomLayer(out, out_w, out_h, bg1_words, n_words, grid_w, grid_h);
+  SM2_UnlockGameState();
   return true;
 }

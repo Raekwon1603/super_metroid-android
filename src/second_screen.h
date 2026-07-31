@@ -7,6 +7,18 @@
 // platform that wants to build a companion display. Plain C, no platform
 // dependencies - just reads g_ram-backed globals from variables.h.
 
+// Implemented in main.c (alongside the existing RtlApuLock/RtlApuUnlock
+// pattern) - guards the game's own per-frame execution against this file's
+// SM2_RenderCurrentRoomArt/SM2_RenderAreaMap, which call the shared,
+// non-reentrant DecompressToMem/DecompressToVRAM (sm_80.c, whose
+// decompress_src cursor is a single file-scope global) from the UI/JNI
+// thread while the game thread may be mid-decompression itself. Any SM2_*
+// function in this file that calls DecompressToMem or DecompressToVRAM
+// MUST wrap that call (or the smallest span of calls that must stay
+// consistent with each other) in SM2_LockGameState()/SM2_UnlockGameState().
+void SM2_LockGameState(void);
+void SM2_UnlockGameState(void);
+
 // ---- player / location ----
 int SM2_GetSamusX(void);
 int SM2_GetSamusY(void);

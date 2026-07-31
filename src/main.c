@@ -21,6 +21,7 @@
 #include "config.h"
 #include "util.h"
 #include "spc_player.h"
+#include "second_screen.h"
 
 #ifdef __SWITCH__
 #include "switch_impl.h"
@@ -214,6 +215,29 @@ void RtlApuLock(void) {
 
 void RtlApuUnlock(void) {
   SDL_UnlockMutex(g_audio_mutex);
+}
+
+// Guards the game's own per-frame execution (RtlRunFrame below) against the
+// second-screen JNI thread's reads of shared, non-reentrant emulator state -
+// specifically DecompressToMem/DecompressToVRAM's shared decompress_src
+// cursor (sm_80.c), which second_screen.c's room-art/area-map renderers
+// call from the UI thread while the game thread may be mid-decompression
+// itself (most likely during the opening cinematic, which calls
+// DecompressToMem many times in a tight sequence - CinematicFunction_
+// Intro_Initial alone calls it 6 times back to back, sm_8b.c). Without this,
+// both threads race on decompress_src, corrupting each other's read
+// position and causing a runaway decompression loop that writes past its
+// destination buffer - confirmed via a SIGSEGV inside RtlRunFrameCompare
+// with a poisoned-heap fault address, only reproducible by opening the
+// second screen's map during a brand new save's intro sequence.
+static SDL_mutex *g_game_state_mutex;
+
+void SM2_LockGameState(void) {
+  SDL_LockMutex(g_game_state_mutex);
+}
+
+void SM2_UnlockGameState(void) {
+  SDL_UnlockMutex(g_game_state_mutex);
 }
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
@@ -429,6 +453,9 @@ int main(int argc, char** argv) {
   g_audio_mutex = SDL_CreateMutex();
   if (!g_audio_mutex) Die("No mutex");
 
+  g_game_state_mutex = SDL_CreateMutex();
+  if (!g_game_state_mutex) Die("No mutex");
+
   g_spc_player = SpcPlayer_Create();
   SpcPlayer_Initialize(g_spc_player);
 
@@ -533,7 +560,9 @@ int main(int argc, char** argv) {
       g_gamepad_buttons = 0;
     inputs |= g_gamepad_buttons;
 
+    SM2_LockGameState();
     uint8 is_replay = RtlRunFrame(inputs);
+    SM2_UnlockGameState();
 
     frameCtr++;
     g_snes->disableRender = (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0;

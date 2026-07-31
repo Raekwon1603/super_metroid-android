@@ -775,18 +775,29 @@ public class MapStatusView extends View {
 
                 switch (currentTab) {
                     case MAP:
-                        if (realTextureMode) {
-                            // No real-texture WORLD composite yet (a
-                            // bigger follow-up - stitching every explored
-                            // room's real art together, not just one) -
-                            // real-texture mode always shows the current
-                            // single room for now, regardless of
-                            // worldView's own zoomed-in/out state.
-                            drawRoomArt(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
-                        } else if (worldView) {
-                            drawWorldView(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
-                        } else {
-                            drawMap(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                        // Skip drawing the map entirely outside real live
+                        // gameplay (title/file-select, intro cinematic,
+                        // demo attract-mode) instead of drawing real-but-
+                        // stale content and only dimming it afterward - the
+                        // demo's own explored-tile state is real, valid
+                        // game data (SM's attract-mode demo actually walks
+                        // through areas), so it previously showed through
+                        // as a misleadingly "100% explored" map on a brand
+                        // new file, before the player has even started.
+                        if (GameState.isPlayingLive()) {
+                            if (realTextureMode) {
+                                // No real-texture WORLD composite yet (a
+                                // bigger follow-up - stitching every explored
+                                // room's real art together, not just one) -
+                                // real-texture mode always shows the current
+                                // single room for now, regardless of
+                                // worldView's own zoomed-in/out state.
+                                drawRoomArt(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                            } else if (worldView) {
+                                drawWorldView(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                            } else {
+                                drawMap(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                            }
                         }
                         break;
                     case EQUIPMENT:
