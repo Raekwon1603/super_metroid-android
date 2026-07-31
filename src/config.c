@@ -416,6 +416,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBool(value, &g_config.display_perf_title);
     } else if (StringEqualsNoCase(key, "DisableFrameDelay")) {
       return ParseBool(value, &g_config.disable_frame_delay);
+    } else if (StringEqualsNoCase(key, "AutoRun")) {
+      return ParseBool(value, &g_config.auto_run);
     }
   } else if (section == 4) {
   }

@@ -62,6 +62,13 @@ typedef struct Config {
   uint8 extended_aspect_ratio;
   bool extend_y;
   bool no_sprite_limits;
+  // Samus runs by default; holding the configured run/shoot button walks
+  // instead. Ported from the "Auto Run" Special Setting in the Control
+  // Freak 2 ROM hack (see Super-Metroid-Redux's own ControlFreakProjectBase
+  // sources) - ($09E4)'s AutoRunCheck inverts the run-button-held check at
+  // its two real gameplay sites (Samus_HandleSpeedBoosterAnimDelay,
+  // Samus_HandleExtraRunspeedX in sm_90.c) whenever this is on.
+  bool auto_run;
   bool display_perf_title;
   uint8 enable_msu;
   bool resume_msu;

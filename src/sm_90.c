@@ -4,6 +4,7 @@
 #include "variables.h"
 #include "sm_rtl.h"
 #include "funcs.h"
+#include "config.h"
 
 #define kSamusFramesForUnderwaterSfx ((uint8*)RomFixedPtr(0x90a514))
 #define kPauseMenuMapData ((uint16*)RomFixedPtr(0x829717))
@@ -333,8 +334,23 @@ static Func_AnimDelay *const kAnimDelayFuncs[16] = {  // 0x9082DC
 
 #define kDefaultAnimFramePtr ((uint16 *)RomFixedPtr(0x91B5D1))
 
+// Whether the configured run button currently reads as "held" for movement
+// purposes - normally a plain passthrough of the real input state, but
+// inverted when g_config.auto_run is on (Samus runs by default; holding the
+// button walks instead). Ported from the Control Freak 2 ROM hack's
+// AutoRunCheck routine (Super-Metroid-Redux's ControlFreakProjectBase
+// sources: $09E4 toggle, XORs the run bit's sense against $09B6/
+// button_config_run_b) - ONLY the two real gameplay sites it patches
+// ($908542 inside Samus_HandleSpeedBoosterAnimDelay, $909781 inside
+// Samus_HandleExtraRunspeedX) are touched, matching that hack's own scope
+// exactly rather than guessing at other places the run button is read.
+static bool Samus_IsRunButtonEffectivelyHeld(void) {
+  bool held = (button_config_run_b & joypad1_lastkeys) != 0;
+  return g_config.auto_run ? !held : held;
+}
+
 static uint8 Samus_HandleSpeedBoosterAnimDelay(const uint8 *jp) {  // 0x90852C
-  if (!samus_has_momentum_flag || (button_config_run_b & joypad1_lastkeys) == 0 || samus_movement_type != 1)
+  if (!samus_has_momentum_flag || !Samus_IsRunButtonEffectivelyHeld() || samus_movement_type != 1)
     return jp[0];
   if ((equipped_items & 0x2000) == 0) {
     samus_anim_frame = 0;
@@ -1404,7 +1420,7 @@ LABEL_24:
       goto LABEL_24;
     }
   }
-  if (samus_movement_type != 1 || (button_config_run_b & joypad1_lastkeys) == 0)
+  if (samus_movement_type != 1 || !Samus_IsRunButtonEffectivelyHeld())
     goto LABEL_24;
   if ((equipped_items & 0x2000) != 0) {
     if (!samus_has_momentum_flag) {
