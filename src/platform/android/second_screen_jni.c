@@ -96,6 +96,15 @@ JNIEXPORT jboolean JNICALL JFN(getSamusMapTile)(JNIEnv *env, jclass clazz, jintA
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(getSamusMapPosFixed)(JNIEnv *env, jclass clazz, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 2) return JNI_FALSE;
+  int tmp[2];
+  SM2_GetSamusMapPosFixed(&tmp[0], &tmp[1]);
+  (*env)->SetIntArrayRegion(env, out, 0, 2, (jint *)tmp);
+  return JNI_TRUE;
+}
+
 // 512x256 ARGB8888 scratch buffer - too large to put on the stack safely,
 // same reasoning as zelda3-android's second_screen_jni.c g_jni_px buffer.
 static uint32 g_map_px[512 * 256];

@@ -53,6 +53,19 @@ void SM2_DecodeExploredGrid(uint8 *out);
 // same coordinate space as SM2_DecodeExploredGrid and SM2_GetRoomMapRect.
 void SM2_GetSamusMapTile(int *out_x, int *out_y);
 
+// Same coordinate space as SM2_GetSamusMapTile, but sub-tile-precise and
+// scaled by 256 (fixed-point) instead of floored to a whole map tile -
+// SM2_GetSamusMapTile only changes once every 256 room-pixels of movement
+// (one full map tile), which reads as a visible "snap" every couple of
+// seconds of walking rather than smooth motion. samus_x_pos/samus_y_pos
+// are plain absolute room-pixel coordinates (confirmed via this decomp's
+// own actor code, e.g. sm_a3.c/sm_a5.c assigning samus_x_pos = a real
+// actor x_pos field directly - not fixed-point), so dividing by 256
+// (one map tile's pixel width) gives a continuously-varying tile-space
+// position - out_x256/out_y256 are that value times 256, so callers get
+// sub-pixel precision without needing floating point here.
+void SM2_GetSamusMapPosFixed(int *out_x256, int *out_y256);
+
 // Whether the player has explored any tile at all in the given area (0-7,
 // not just the currently-loaded one) - true real exploration progress, not
 // map-station ownership (LoadPauseMenuMapTilemap's own gate, which most

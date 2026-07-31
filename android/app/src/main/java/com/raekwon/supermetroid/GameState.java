@@ -39,6 +39,15 @@ public class GameState {
     // out must be length >= 2: {tileX, tileY}, same space as decodeExploredGrid.
     public static native boolean getSamusMapTile(int[] out);
 
+    // Same coordinate space as getSamusMapTile, but sub-tile-precise and
+    // scaled by 256 (fixed-point) instead of floored to a whole map tile -
+    // getSamusMapTile only changes once every 256 room-pixels of movement,
+    // which looks like the map cursor "snapping" every couple of seconds
+    // instead of moving smoothly. out must be length >= 2: {x256, y256} -
+    // divide by 256f to get the same float tile-space position
+    // getSamusMapTile floors to an int.
+    public static native boolean getSamusMapPosFixed(int[] out);
+
     // Decodes the given area's real map tile graphics (from ROM, same data
     // the in-game pause menu uses) into a 512x256 ARGB8888 buffer, one
     // 8x8px tile per map-grid cell (64x32). out must be length >= 512*256.

@@ -415,6 +415,7 @@ public class MapStatusView extends View {
     private int resetCameraBtnPointerId = -1;
 
     private final int[] samusTile = new int[2];
+    private final int[] samusMapPosFixed = new int[2];
 
     private final int[] mapPixels = new int[MAP_PX_W * MAP_PX_H];
     private final Bitmap mapBitmap;
@@ -1024,6 +1025,13 @@ public class MapStatusView extends View {
 
     private void drawMap(Canvas canvas, float left, float top, float right, float bottom) {
         GameState.getSamusMapTile(samusTile);
+        // Sub-tile-precise position for smooth camera/marker motion -
+        // samusTile alone only changes once every 256 room-pixels (one
+        // whole map tile), which reads as the map "snapping" every couple
+        // of seconds of walking rather than tracking Samus continuously.
+        GameState.getSamusMapPosFixed(samusMapPosFixed);
+        float samusSmoothX = samusMapPosFixed[0] / 256f;
+        float samusSmoothY = samusMapPosFixed[1] / 256f;
 
         int area = GameState.getArea();
         frameCounter++;
@@ -1072,8 +1080,9 @@ public class MapStatusView extends View {
         // valid yet), clamped so it never scrolls past the map edges. At
         // MIN_ZOOM this covers exactly the auto-fit region.
         int sx = samusTile[0], sy = samusTile[1];
-        float centerX = (sx >= 0 && sx < GRID_W) ? sx + 0.5f : fitCenterX;
-        float centerY = (sy >= 0 && sy < GRID_H) ? sy + 0.5f : fitCenterY;
+        boolean samusOnGrid = sx >= 0 && sx < GRID_W && sy >= 0 && sy < GRID_H;
+        float centerX = samusOnGrid ? samusSmoothX : fitCenterX;
+        float centerY = samusOnGrid ? samusSmoothY : fitCenterY;
 
         // Manual drag pan, added on top of the Samus-centered baseline -
         // see panOffsetX/Y's field comment. Clamping happens naturally
@@ -1106,9 +1115,9 @@ public class MapStatusView extends View {
         tilesPerPixelX = 1f / cellW;
         tilesPerPixelY = 1f / cellH;
 
-        if (sx >= 0 && sx < GRID_W && sy >= 0 && sy < GRID_H) {
-            float cx = left + ((sx + 0.5f) * 8 - srcLeft) * scaleX;
-            float cy = top + ((sy + 0.5f) * 8 - srcTop) * scaleY;
+        if (samusOnGrid) {
+            float cx = left + (samusSmoothX * 8 - srcLeft) * scaleX;
+            float cy = top + (samusSmoothY * 8 - srcTop) * scaleY;
             float radius = Math.min(cellW, cellH) * 0.55f;
             canvas.drawCircle(cx, cy, radius, samusDotPaint);
             canvas.drawCircle(cx, cy, radius, samusRingPaint);
@@ -1512,6 +1521,9 @@ public class MapStatusView extends View {
     // repositioning/cropping separate per-area bitmaps every frame.
     private void drawWorldView(Canvas canvas, float left, float top, float right, float bottom) {
         GameState.getSamusMapTile(samusTile);
+        GameState.getSamusMapPosFixed(samusMapPosFixed);
+        float samusSmoothX = samusMapPosFixed[0] / 256f;
+        float samusSmoothY = samusMapPosFixed[1] / 256f;
         ensureWorldAreaFresh();
 
         int currentArea = GameState.getArea();
@@ -1595,8 +1607,8 @@ public class MapStatusView extends View {
             float[] l = WORLD_AREA_LAYOUT[remappedCurrent];
             int declMinX = (int) l[0], declMinY = (int) l[1], declMaxX = (int) l[2], declMaxY = (int) l[3];
             if (sx >= declMinX && sx < declMaxX && sy >= declMinY && sy < declMaxY) {
-                float mx = originX + (l[4] + (sx - declMinX) + 0.5f) * scale;
-                float my = originY + (l[5] + (sy - declMinY) + 0.5f) * scale;
+                float mx = originX + (l[4] + (samusSmoothX - declMinX)) * scale;
+                float my = originY + (l[5] + (samusSmoothY - declMinY)) * scale;
                 float radius = scale * 0.55f;
                 canvas.drawCircle(mx, my, radius, samusDotPaint);
                 canvas.drawCircle(mx, my, radius, samusRingPaint);

@@ -128,6 +128,11 @@ void SM2_GetSamusMapTile(int *out_x, int *out_y) {
   *out_y = room_y_coordinate_on_map + (samus_y_pos >> 8) + 1;
 }
 
+void SM2_GetSamusMapPosFixed(int *out_x256, int *out_y256) {
+  *out_x256 = room_x_coordinate_on_map * 256 + samus_x_pos;
+  *out_y256 = room_y_coordinate_on_map * 256 + samus_y_pos + 256;
+}
+
 // SNES 4bpp planar: 32 bytes/tile - first 16 bytes are bitplanes 0/1
 // interleaved per row, last 16 are bitplanes 2/3 interleaved per row.
 // (px, py) are pixel coords within the tile, pixel 0 = MSB (leftmost).
