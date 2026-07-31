@@ -97,4 +97,18 @@ public class GameState {
     public static final int AMMO_XRAY = 5;
     public static native int getSelectedAmmo();
     public static native void setSelectedAmmo(int index);
+
+    // Real room background art - the actual walls/floor/decoration tiles
+    // the game draws during live gameplay, NOT the schematic pause-map
+    // rectangles renderAreaMap produces. out must be length >=
+    // ROOM_ART_MAX_W*ROOM_ART_MAX_H (only the first outDims[1] rows x
+    // outDims[0] columns are actually written - the rest of out is
+    // untouched, not cleared, so callers must respect outDims rather than
+    // assuming the whole buffer is valid image data). outDims must be
+    // length >= 2: {realWidthPx, realHeightPx}, the room's true pixel
+    // size - may exceed ROOM_ART_MAX_W/H for a handful of SM's largest
+    // rooms, meaning the render was clipped rather than an error.
+    public static final int ROOM_ART_MAX_W = 2048;
+    public static final int ROOM_ART_MAX_H = 2048;
+    public static native boolean renderCurrentRoomArt(int[] out, int[] outDims);
 }

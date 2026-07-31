@@ -178,3 +178,25 @@ int SM2_GetSelectedAmmo(void);
 // Writes hud_item_index directly - the same effect as pressing Select on
 // the controller until this slot is reached. No-op for out-of-range values.
 void SM2_SetSelectedAmmo(int index);
+
+// ---- real room background art ----
+// Max room-art render buffer dimensions - a handful of SM's largest rooms
+// (tall elevator/water shafts) exceed this and get clipped rather than
+// requiring an unbounded allocation; the overwhelming majority of real
+// rooms fit comfortably within it.
+#define kSM2RoomArtMaxW 2048
+#define kSM2RoomArtMaxH 2048
+
+// Renders the CURRENT room's real background art (the actual walls/floor/
+// decoration tiles the game draws during live gameplay - BG1, plus BG2 if
+// this room state has one) into out (out_w x out_h, caller-allocated ARGB
+// buffer, capped at kSM2RoomArtMaxW x kSM2RoomArtMaxH). This is NOT the
+// same data as SM2_RenderAreaMap (which decodes the schematic pause-menu
+// map tiles - simple colored rectangles/outlines) - this decodes the
+// literal in-game room art, unabridged. Fills out_w_used/out_h_used with
+// the room's real pixel dimensions (room_width_in_blocks/
+// room_height_in_blocks * 16), which may exceed the buffer for a few
+// oversized rooms - callers should treat that as "bigger than what got
+// rendered", not an error. Returns false if the ROM isn't loaded yet or no
+// room is currently loaded.
+bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used, int *out_h_used);

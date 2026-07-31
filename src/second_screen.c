@@ -1,7 +1,9 @@
 #include <string.h>
 #include "second_screen.h"
+#include "ida_types.h"
 #include "variables.h"
 #include "sm_rtl.h"
+#include "funcs.h"
 
 // Same ROM addresses LoadPauseMenuMapTilemap (sm_82.c) uses to build the
 // in-game pause-menu map screen - redefined locally here the same way
@@ -518,4 +520,224 @@ void SM2_SetSelectedAmmo(int index) {
   // the HUD/aim-cursor code re-reads it every frame rather than caching it.
   if (index < 0 || index > 5) return;
   hud_item_index = index;
+}
+
+// ---- Real room background art (not the schematic pause-map tiles above) ----
+//
+// Renders the CURRENT room's actual BG1 (+BG2 if present) tilemap, exactly
+// as the real game draws it during play - not the abstract colored-
+// rectangle pause-map representation SM2_RenderAreaMap produces. This is
+// possible with no reverse-engineering of room-state-select logic at all:
+// by the time a room has finished loading, the real game has ALREADY
+// walked that logic itself (LoadRoomHeader/LoadStateHeader, sm_82.c) and
+// left the results sitting in plain, already-decompressed RAM:
+//   - level_data (g_ram+0x10002) = the room's BG1 tilemap
+//   - custom_background (right after level_data + BTS) = BG2, if present
+//   - tile_table (g_ram+0xA000) = the combined 1024-entry CRE+room
+//     metatile table (indices 0-255 CRE, 256-1023 room-specific)
+//   - room_width_in_blocks/room_height_in_blocks = the room's real size
+// All of this is read-only here - never written - so it's safe to read
+// from the JNI/UI thread without disturbing the running game.
+//
+// The one piece NOT already sitting in plain RAM is the 8x8 tile PIXEL
+// graphics themselves (SNES VRAM isn't emulated as a flat readable buffer
+// in this decomp) - those still need decompressing from ROM, via the same
+// DecompressToMem the real game itself calls (sm_80.c) - not a
+// reimplementation, the actual function, so there's no risk of a
+// decompression bug independent of the game's own logic. tileset_tiles_
+// pointer/tileset_compr_palette_ptr (g_ram+0x7C3/0x7C6) hold the live
+// ROM addresses for the CURRENT room's own tile graphics/palette; CRE's
+// own tile graphics are always the same fixed ROM address (0xb98000).
+//
+// Verified end-to-end (decompression, metatile assembly, CRE/room
+// graphics-tile split, BG1/BG2 layering) via a standalone Python
+// re-implementation against the real ROM dump before this code was
+// written - see chat history for the Landing Site / Morph Ball Room
+// renders that caught and fixed 3 real bugs (backwards CRE/room graphics
+// boundary, wrong ci==0 transparency rule) before this port.
+#define kGfxSplit 640  // tile index < 640 = room-specific graphics, >= 640 = CRE (offset by 640) - fixed VRAM convention, NOT derived from either blob's size (sm_82.c:4202-4210)
+
+// Scratch decompression buffers - room tile graphics can run up to several
+// hundred tiles (32 bytes/tile); sized generously above any real room's
+// needs. Static (not stack) since these are too large to put on the stack
+// safely, matching the g_map_px precedent in second_screen_jni.c.
+static uint8 s_room_tiles_buf[0x8000];
+static uint8 s_cre_tiles_buf[0x8000];
+
+// Level-data blob, decompressed fresh here rather than trusting g_ram's own
+// level_data/custom_background - see SM2_RenderCurrentRoomArt's own
+// comment for why: the real game's memcpy for custom_background always
+// copies `size` bytes starting right after BG1+BTS in this SAME
+// decompressed blob, regardless of whether that data is real BG2 content
+// or past-the-end leftover bytes from whatever used this buffer last (a
+// room with no real BG2 layer has a decompressed blob that ends right
+// after BTS - confirmed for Morph Ball Room, whose blob is exactly
+// 2+size+size/2 bytes long, no room left for a BG2 section at all). We
+// need the blob's own total decompressed length to tell real BG2 apart
+// from that leftover-byte case, which the real game itself doesn't keep
+// around once parsed - so decompress independently here, into our own
+// buffer, purely to recover that length safely.
+static uint8 s_level_data_buf[0x8000];
+
+// The room's own live palette (decompressed from tileset_compr_palette_ptr,
+// NOT kPauseScreenPalettes - that fixed 0xb6f000 bank is the PAUSE-MENU
+// screen's own palette, entirely unrelated to gameplay's real per-room/
+// per-tileset colors; using it here was the cause of the wrong-color/
+// distorted look on first render). 256 colors x 2 bytes, same as every
+// other palette decode in this file - set once per SM2_RenderCurrentRoomArt
+// call, read by RenderRoomSubtile via this file-scope pointer rather than
+// threading it through every call in the composite chain.
+static uint16 s_room_palette[256];
+
+// Renders one 8x8 subtile (from a TileTable corner word) into out at
+// (ox,oy), skipping tiles that are entirely blank (all 64 pixels index 0 -
+// SM's real "no art here" placeholder tiles are built this way; ordinary
+// tiles use index 0 as a real opaque color, usually black, for internal
+// shadow/detail - see chat history for how conflating the two produced
+// visible glitches during the Python prototype).
+static void RenderRoomSubtile(uint32 *out, int out_w, int out_h, uint16 sub_word,
+                               bool meta_flip_x, bool meta_flip_y, int ox, int oy) {
+  int tile_index = sub_word & 0x3FF;
+  int palette_row = (sub_word >> 10) & 7;
+  bool flip_x = ((sub_word & 0x4000) != 0) != meta_flip_x;
+  bool flip_y = ((sub_word & 0x8000) != 0) != meta_flip_y;
+
+  const uint8 *gfx;
+  int gfx_len, local_idx;
+  if (tile_index < kGfxSplit) {
+    gfx = s_room_tiles_buf;
+    gfx_len = sizeof(s_room_tiles_buf);
+    local_idx = tile_index;
+  } else {
+    gfx = s_cre_tiles_buf;
+    gfx_len = sizeof(s_cre_tiles_buf);
+    local_idx = tile_index - kGfxSplit;
+  }
+
+  int tile_off = local_idx * 32;
+  if (tile_off + 32 > gfx_len) return;
+  const uint8 *tile = gfx + tile_off;
+
+  bool is_blank = true;
+  for (int py = 0; py < 8 && is_blank; py++)
+    for (int px = 0; px < 8; px++)
+      if (Snes4bppColorIndex(tile, px, py) != 0) { is_blank = false; break; }
+  if (is_blank) return;
+
+  for (int py = 0; py < 8; py++) {
+    int sy = flip_y ? 7 - py : py;
+    int dy = oy + py;
+    if (dy < 0 || dy >= out_h) continue;
+    for (int px = 0; px < 8; px++) {
+      int sx = flip_x ? 7 - px : px;
+      int dx = ox + px;
+      if (dx < 0 || dx >= out_w) continue;
+      int ci = Snes4bppColorIndex(tile, sx, sy);
+      uint16 color15 = s_room_palette[palette_row * 16 + ci];
+      out[dy * out_w + dx] = Snes15ToArgb(color15);
+    }
+  }
+}
+
+// Composites one BG layer's tilemap (level_data or custom_background) into
+// out, grid_w x grid_h metatiles (16x16px each). Mirrors DrawPlmTilemap's
+// own combined-flip corner-swap convention (sm_84.c:868-893).
+static void CompositeRoomLayer(uint32 *out, int out_w, int out_h, const uint16 *words,
+                                int n_words, int grid_w, int grid_h) {
+  int cells = grid_w * grid_h;
+  if (cells > n_words) cells = n_words;
+  for (int i = 0; i < cells; i++) {
+    uint16 word = words[i];
+    int gx = i % grid_w, gy = i / grid_w;
+    int metatile_idx = word & 0x3FF;
+    bool meta_flip_x = (word & 0x4000) != 0;
+    bool meta_flip_y = (word & 0x8000) != 0;
+    if (metatile_idx >= 1024) continue;
+
+    const TileTable *mt = &tile_table.tables[metatile_idx];
+    uint16 tl = mt->top_left, tr = mt->top_right, bl = mt->bottom_left, br = mt->bottom_right;
+    uint16 c0 = tl, c1 = tr, c2 = bl, c3 = br;  // corner order: TL,TR,BL,BR
+    if (meta_flip_x) { c0 = tr; c1 = tl; c2 = br; c3 = bl; }
+    if (meta_flip_y) { uint16 t0=c0,t1=c1,t2=c2,t3=c3; c0=t2; c1=t3; c2=t0; c3=t1; }
+
+    int ox = gx * 16, oy = gy * 16;
+    RenderRoomSubtile(out, out_w, out_h, c0, meta_flip_x, meta_flip_y, ox, oy);
+    RenderRoomSubtile(out, out_w, out_h, c1, meta_flip_x, meta_flip_y, ox + 8, oy);
+    RenderRoomSubtile(out, out_w, out_h, c2, meta_flip_x, meta_flip_y, ox, oy + 8);
+    RenderRoomSubtile(out, out_w, out_h, c3, meta_flip_x, meta_flip_y, ox + 8, oy + 8);
+  }
+}
+
+// Renders the CURRENT room's real background art into out (out_w x out_h,
+// caller-allocated, capped at kRoomArtMaxW x kRoomArtMaxH - a handful of
+// SM's largest rooms, e.g. tall elevator/water shafts, exceed this and get
+// clipped rather than requiring an unbounded allocation). Fills out_w_used/
+// out_h_used with the room's real pixel dimensions (which may be larger
+// than the buffer - callers should treat that as "this room is bigger than
+// what got rendered", not an error). Returns false if the ROM isn't loaded
+// yet or no room is currently loaded.
+bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used, int *out_h_used) {
+  if (!g_rom) return false;
+  if (room_width_in_blocks <= 0 || room_height_in_blocks <= 0) return false;
+
+  int room_px_w = room_width_in_blocks * 16;
+  int room_px_h = room_height_in_blocks * 16;
+  *out_w_used = room_px_w < out_w ? room_px_w : out_w;
+  *out_h_used = room_px_h < out_h ? room_px_h : out_h;
+
+  memset(out, 0, sizeof(uint32) * (size_t)out_w * out_h);
+
+  // Room-specific + CRE tile GRAPHICS (not in plain RAM - VRAM isn't
+  // emulated as a flat buffer here - so decompress from ROM via the same
+  // function the real game itself calls, sm_80.c).
+  DecompressToMem(Load24(&tileset_tiles_pointer), s_room_tiles_buf);
+  DecompressToMem(0xb98000, s_cre_tiles_buf);
+
+  // The room's own live palette - NOT kPauseScreenPalettes (that's the
+  // pause-menu screen's fixed bank, unrelated to gameplay colors; using
+  // it produced visibly wrong colors on first render, e.g. warm gold/brown
+  // Tourian metal rendering as cool pink/gray).
+  DecompressToMem(Load24(&tileset_compr_palette_ptr), (uint8 *)s_room_palette);
+
+  // Decompress level_data fresh into our own buffer (rather than trusting
+  // g_ram's own level_data/custom_background) purely to recover the
+  // blob's real total length, which the real game itself discards once
+  // parsed - see s_level_data_buf's own comment for why this matters (a
+  // room with no real BG2 layer has custom_background populated from
+  // past-the-end leftover bytes, not real "no BG2" data, if read
+  // unconditionally from g_ram). Sentinel-fill first so we can detect how
+  // far real decompressed data actually reached: DecompressToMem has no
+  // return value, so this is the only way to recover its output length
+  // without modifying the function itself.
+  static const uint8 kSentinel = 0xA5;
+  memset(s_level_data_buf, kSentinel, sizeof(s_level_data_buf));
+  DecompressToMem(Load24(&room_compr_level_data_ptr), s_level_data_buf);
+
+  int grid_w = room_width_in_blocks, grid_h = room_height_in_blocks;
+  int n_words = grid_w * grid_h;
+  int size = s_level_data_buf[0] | (s_level_data_buf[1] << 8);  // BG1's own byte size (== room_size_in_blocks)
+  int bg2_offset = 2 + size + (size >> 1);
+  // Check several bytes spread across the BG2 region rather than just one -
+  // a real decompressed BG2 blob could coincidentally end in the sentinel
+  // byte value, and a partially-written region (decompression stopping
+  // mid-way for some other reason) should also read as "no real BG2" here.
+  bool has_bg2 = bg2_offset + size <= (int)sizeof(s_level_data_buf);
+  if (has_bg2) {
+    int non_sentinel_count = 0;
+    for (int k = 0; k < 8; k++) {
+      int check_off = bg2_offset + (size * k) / 8;
+      if (check_off < (int)sizeof(s_level_data_buf) && s_level_data_buf[check_off] != kSentinel) {
+        non_sentinel_count++;
+      }
+    }
+    has_bg2 = non_sentinel_count >= 4;  // majority of sampled bytes were actually written
+  }
+
+  const uint16 *bg1_words = (const uint16 *)(s_level_data_buf + 2);
+  if (has_bg2) {
+    const uint16 *bg2_words = (const uint16 *)(s_level_data_buf + bg2_offset);
+    CompositeRoomLayer(out, out_w, out_h, bg2_words, n_words, grid_w, grid_h);
+  }
+  CompositeRoomLayer(out, out_w, out_h, bg1_words, n_words, grid_w, grid_h);
+  return true;
 }

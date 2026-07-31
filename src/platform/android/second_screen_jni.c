@@ -253,3 +253,33 @@ JNIEXPORT jboolean JNICALL JFN(renderSamusWireframe)(JNIEnv *env, jclass clazz, 
   (*env)->SetIntArrayRegion(env, out, 0, 64 * 136, (jint *)g_wireframe_px);
   return JNI_TRUE;
 }
+
+// kSM2RoomArtMaxW x kSM2RoomArtMaxH ARGB8888 scratch buffer - too large to
+// put on the stack safely, same reasoning as g_map_px above (16MB at the
+// full 2048x2048 cap, so definitely not stack-local).
+static uint32 g_room_art_px[kSM2RoomArtMaxW * kSM2RoomArtMaxH];
+
+// outDims must be length >= 2: {realWidthPx, realHeightPx} - the room's
+// true pixel dimensions, which may exceed what actually got rendered into
+// out if this room is one of the handful bigger than kSM2RoomArtMaxW x
+// kSM2RoomArtMaxH (see SM2_RenderCurrentRoomArt's own comment). out must
+// be length >= kSM2RoomArtMaxW * kSM2RoomArtMaxH, but only the first
+// w_used*h_used entries are actually written/copied back - most real
+// rooms are far smaller than the full cap, so copying only the used
+// portion (row by row, since out's own stride is the fixed
+// kSM2RoomArtMaxW, not w_used) keeps this cheap for the common case
+// instead of always moving the full 16MB buffer across the JNI boundary.
+JNIEXPORT jboolean JNICALL JFN(renderCurrentRoomArt)(JNIEnv *env, jclass clazz, jintArray out, jintArray outDims) {
+  (void)clazz;
+  if (!out || !outDims) return JNI_FALSE;
+  if ((*env)->GetArrayLength(env, out) < kSM2RoomArtMaxW * kSM2RoomArtMaxH) return JNI_FALSE;
+  if ((*env)->GetArrayLength(env, outDims) < 2) return JNI_FALSE;
+  int w_used, h_used;
+  if (!SM2_RenderCurrentRoomArt(g_room_art_px, kSM2RoomArtMaxW, kSM2RoomArtMaxH, &w_used, &h_used)) return JNI_FALSE;
+  for (int y = 0; y < h_used; y++) {
+    (*env)->SetIntArrayRegion(env, out, y * kSM2RoomArtMaxW, w_used, (jint *)(g_room_art_px + (size_t)y * kSM2RoomArtMaxW));
+  }
+  jint dims[2] = { w_used, h_used };
+  (*env)->SetIntArrayRegion(env, outDims, 0, 2, dims);
+  return JNI_TRUE;
+}

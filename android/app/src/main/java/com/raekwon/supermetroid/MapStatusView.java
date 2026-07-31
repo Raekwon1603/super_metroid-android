@@ -326,6 +326,27 @@ public class MapStatusView extends View {
     private final RectF panelRect = new RectF();
     private final RectF hudBarRect = new RectF();
 
+    // ---- Real room art (realTextureMode, toggled via realTextureBtn) ----
+    // In real-texture mode, the room view swaps from the schematic pause-
+    // map tiles (mapBitmap, decoded via renderAreaMap) to the room's
+    // actual in-game background art (renderCurrentRoomArt) - real walls/
+    // floor/decoration, not colored rectangles. Only decoded on room
+    // change (roomArtCachedRoom), not every frame - a fresh decompress+
+    // composite pass over a whole room is real work, unlike the cheap
+    // per-frame Samus-dot/pan math the rest of this view does.
+    private final int[] roomArtPixels = new int[GameState.ROOM_ART_MAX_W * GameState.ROOM_ART_MAX_H];
+    private final int[] roomArtDims = new int[2];
+    private Bitmap roomArtBitmap;
+    private int roomArtPxW = 0, roomArtPxH = 0;
+    private int roomArtCachedRoom = -1;
+    private boolean haveRoomArt = false;
+    // Manual drag pan (real room pixel units), added on top of the auto-fit
+    // "whole room" baseline - lets you look around the full room instead of
+    // being locked to Samus's own position, since a real room is often far
+    // more detailed than the panel can show at once even zoomed to fit.
+    // Reset on room change so entering a new room always starts centered.
+    private float roomArtPanX = 0f, roomArtPanY = 0f;
+
     // ---- Equipment tab ----
     // Grouped text-list layout matching SM's real pause-menu "SAMUS"
     // equipment screen (SUIT/MISC./BOOTS/BEAM boxes listing collected item
@@ -373,6 +394,25 @@ public class MapStatusView extends View {
     private final RectF zoomOutBtn = new RectF();
     private int zoomButtonPointerId = -1;
     private boolean zoomButtonIsIn;
+
+    // Explicit schematic-vs-real-texture mode toggle (bottom-left of the
+    // map panel, mirroring the zoom buttons' own bottom-right placement) -
+    // a deliberate switch rather than an automatic zoom-past-threshold
+    // trigger, so the two modes are always reachable independent of
+    // zoomFactor. Real-texture mode reuses drawRoomArt for its single-room
+    // view; its own world-composite view is a later follow-up (not built
+    // yet - toggling into real-texture mode while zoomed out currently
+    // just shows the current room, same as fully zoomed in).
+    private final RectF realTextureBtn = new RectF();
+    private boolean realTextureMode = false;
+    private int realTextureBtnPointerId = -1;
+
+    // Recenter/reset-camera button (next to realTextureBtn) - snaps
+    // roomArtPanX/Y back to 0, i.e. back to Samus-centered, without
+    // needing to leave and re-enter the room (which was the only other
+    // way to reset the pan before this).
+    private final RectF resetCameraBtn = new RectF();
+    private int resetCameraBtnPointerId = -1;
 
     private final int[] samusTile = new int[2];
 
@@ -473,7 +513,14 @@ public class MapStatusView extends View {
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-                if (worldView) {
+                if (realTextureMode && haveRoomArt) {
+                    // Real room pixel units here (tilesPerPixelX/Y is
+                    // measured in 8px units for this view - see
+                    // drawRoomArt's own comment - so undo that 8x scaling
+                    // to get back to plain pixels for roomArtPanX/Y).
+                    roomArtPanX += distanceX * tilesPerPixelX * 8f;
+                    roomArtPanY += distanceY * tilesPerPixelY * 8f;
+                } else if (worldView) {
                     worldPanOffsetX += distanceX * worldTilesPerPixelX;
                     worldPanOffsetY += distanceY * worldTilesPerPixelY;
                 } else {
@@ -581,6 +628,10 @@ public class MapStatusView extends View {
         float right = panelRect.right - margin, bottom = panelRect.bottom - margin;
         zoomOutBtn.set(right - size, bottom - size, right, bottom);
         zoomInBtn.set(right - size, bottom - size * 2 - margin * 0.6f, right, bottom - size - margin * 0.6f);
+
+        float left2 = panelRect.left + margin;
+        realTextureBtn.set(left2, bottom - size, left2 + size, bottom);
+        resetCameraBtn.set(left2, bottom - size * 2 - margin * 0.6f, left2 + size, bottom - size - margin * 0.6f);
     }
 
     @Override
@@ -617,6 +668,29 @@ public class MapStatusView extends View {
                 zoomButtonIsIn = zoomInBtn.contains(x, y);
                 return true;
             }
+
+            if (realTextureBtn.contains(x, y)) {
+                realTextureBtnPointerId = event.getPointerId(0);
+                return true;
+            }
+
+            if (resetCameraBtn.contains(x, y)) {
+                resetCameraBtnPointerId = event.getPointerId(0);
+                return true;
+            }
+        } else if (action == MotionEvent.ACTION_UP && realTextureBtnPointerId != -1) {
+            if (realTextureBtn.contains(event.getX(), event.getY())) {
+                realTextureMode = !realTextureMode;
+            }
+            realTextureBtnPointerId = -1;
+            return true;
+        } else if (action == MotionEvent.ACTION_UP && resetCameraBtnPointerId != -1) {
+            if (resetCameraBtn.contains(event.getX(), event.getY())) {
+                roomArtPanX = 0f;
+                roomArtPanY = 0f;
+            }
+            resetCameraBtnPointerId = -1;
+            return true;
         } else if (action == MotionEvent.ACTION_UP && tabTouchPointerId != -1) {
             int idx = tabTouchDownIndex;
             if (idx >= 0 && idx < tabButtonRects.length && tabButtonRects[idx].contains(event.getX(), event.getY())) {
@@ -677,6 +751,8 @@ public class MapStatusView extends View {
             tabTouchPointerId = -1;
             tabTouchDownIndex = -1;
             ammoTouchPointerId = -1;
+            realTextureBtnPointerId = -1;
+            resetCameraBtnPointerId = -1;
         }
 
         if (currentTab == Tab.MAP && zoomButtonPointerId == -1) {
@@ -698,7 +774,15 @@ public class MapStatusView extends View {
 
                 switch (currentTab) {
                     case MAP:
-                        if (worldView) {
+                        if (realTextureMode) {
+                            // No real-texture WORLD composite yet (a
+                            // bigger follow-up - stitching every explored
+                            // room's real art together, not just one) -
+                            // real-texture mode always shows the current
+                            // single room for now, regardless of
+                            // worldView's own zoomed-in/out state.
+                            drawRoomArt(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                        } else if (worldView) {
                             drawWorldView(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
                         } else {
                             drawMap(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
@@ -712,7 +796,11 @@ public class MapStatusView extends View {
                         break;
                 }
                 canvas.drawRoundRect(panelRect, r, r, panelBorderPaint);
-                if (currentTab == Tab.MAP) drawZoomButtons(canvas);
+                if (currentTab == Tab.MAP) {
+                    drawZoomButtons(canvas);
+                    drawRealTextureButton(canvas);
+                    if (realTextureMode) drawResetCameraButton(canvas);
+                }
                 if (!GameState.isPlayingLive()) {
                     drawDimOverlay(canvas, w, h);
                 }
@@ -1029,6 +1117,122 @@ public class MapStatusView extends View {
         if (haveLabel) drawAreaLabel(canvas, left, top, right, area);
     }
 
+    // Real-texture mode (realTextureBtn toggled on): shows the CURRENT
+    // room's real in-game background art (GameState.renderCurrentRoomArt - actual
+    // walls/floor/decoration tiles) rather than the schematic pause-map
+    // rectangles drawMap otherwise shows. Only re-decoded on room change,
+    // not every frame - unlike the schematic map (cheap ROM-tile lookups),
+    // this does a real decompress+composite pass over the whole room.
+    // Samus's own position is drawn using her SUB-tile position within the
+    // room (samus_x_pos/samus_y_pos, not just the map-tile-granularity
+    // samusTile), since real room art has far more resolution than the
+    // pause-map grid to place her against.
+    private void drawRoomArt(Canvas canvas, float left, float top, float right, float bottom) {
+        int room = GameState.getRoom();
+        if (room != roomArtCachedRoom) {
+            if (GameState.renderCurrentRoomArt(roomArtPixels, roomArtDims)) {
+                roomArtPxW = Math.min(roomArtDims[0], GameState.ROOM_ART_MAX_W);
+                roomArtPxH = Math.min(roomArtDims[1], GameState.ROOM_ART_MAX_H);
+                if (roomArtBitmap == null || roomArtBitmap.getWidth() != roomArtPxW || roomArtBitmap.getHeight() != roomArtPxH) {
+                    roomArtBitmap = Bitmap.createBitmap(roomArtPxW, roomArtPxH, Bitmap.Config.ARGB_8888);
+                }
+                // roomArtPixels is laid out with a fixed ROOM_ART_MAX_W
+                // stride (see GameState.renderCurrentRoomArt's own doc) -
+                // setPixels' own stride parameter handles that directly,
+                // no need to repack into a tightly-packed array first.
+                roomArtBitmap.setPixels(roomArtPixels, 0, GameState.ROOM_ART_MAX_W, 0, 0, roomArtPxW, roomArtPxH);
+                haveRoomArt = true;
+            } else {
+                haveRoomArt = false;
+            }
+            roomArtCachedRoom = room;
+            // A pan offset from the previous room's own pixel space is
+            // meaningless here - always start a freshly-entered room
+            // centered on its own whole-room view.
+            roomArtPanX = 0f;
+            roomArtPanY = 0f;
+        }
+
+        if (!haveRoomArt) {
+            // Fall back out of real-texture mode rather than show nothing -
+            // matches drawMap's own tolerance for the ROM not being ready.
+            realTextureMode = false;
+            return;
+        }
+
+        float availW = right - left, availH = bottom - top;
+        // Fit the room to the panel using ONE shared scale on both axes
+        // (no independent X/Y stretch, which produced visibly distorted
+        // art - a room's real aspect ratio rarely matches the panel's).
+        // MAX (not MIN) of the two ratios means: whichever axis is
+        // narrower relative to the room gets fully covered with no
+        // letterboxing, while the other axis shows a same-scale crop
+        // rather than a squashed/stretched full view - exactly where
+        // roomArtPanX/Y (drag-adjusted, reset on room change) becomes
+        // useful, since that cropped axis is real room content you can
+        // now pan across instead of seeing a distorted whole-room fit.
+        float fitScale = Math.max(availW / roomArtPxW, availH / roomArtPxH);
+        float viewW = availW / fitScale, viewH = availH / fitScale;
+
+        // Center on Samus's own live position (matching drawMap's own
+        // Samus-centered baseline), not the room's geometric center - a
+        // static room-center baseline could put Samus outside the
+        // cropped viewport entirely on whichever axis doesn't fully fit,
+        // making her marker vanish rather than "follow" her. Falls back
+        // to room-center only if her position isn't valid yet.
+        // samus_x_pos/samus_y_pos are plain absolute room-pixel coordinates,
+        // NOT fixed-point - confirmed by cross-referencing this decomp's own
+        // enemy/actor code (sm_a3.c, sm_a5.c, sm_a6.c, sm_a8.c etc.), which
+        // assigns samus_x_pos = E->base.x_pos interchangeably with real
+        // actor x_pos fields (always plain room-pixel values used for
+        // collision/drawing), and edge-wrap checks like
+        // `(samus_x_pos & 0xF0) == 16` in sm_82.c's door-transition code,
+        // which only make sense on a raw 0-255-ish pixel value. The earlier
+        // /256*16 (=/16) conversion was based on a DIFFERENT call site
+        // (sm_82.c:1274's pause-map cursor math, which intentionally right-
+        // shifts to coarse MAP-TILE units for a different display) and
+        // does not apply to in-room pixel position.
+        int sxFullBaseline = GameState.getSamusX(), syFullBaseline = GameState.getSamusY();
+        float samusPxXBaseline = sxFullBaseline, samusPxYBaseline = syFullBaseline;
+        boolean samusValid = samusPxXBaseline >= 0 && samusPxXBaseline < roomArtPxW
+                && samusPxYBaseline >= 0 && samusPxYBaseline < roomArtPxH;
+        float baseCenterX = samusValid ? samusPxXBaseline : roomArtPxW / 2f;
+        float baseCenterY = samusValid ? samusPxYBaseline : roomArtPxH / 2f;
+
+        float centerPxX = baseCenterX + roomArtPanX;
+        float centerPxY = baseCenterY + roomArtPanY;
+
+        float vx0 = centerPxX - viewW / 2f, vy0 = centerPxY - viewH / 2f;
+        int srcLeft = clampInt(Math.round(vx0), 0, Math.max(0, roomArtPxW - Math.round(viewW)));
+        int srcTop = clampInt(Math.round(vy0), 0, Math.max(0, roomArtPxH - Math.round(viewH)));
+        int srcW = clampInt(Math.round(viewW), 1, roomArtPxW);
+        int srcH = clampInt(Math.round(viewH), 1, roomArtPxH);
+
+        Rect src = new Rect(srcLeft, srcTop, srcLeft + srcW, srcTop + srcH);
+        Rect dest = new Rect((int) left, (int) top, (int) right, (int) bottom);
+        canvas.drawBitmap(roomArtBitmap, src, dest, mapPaint);
+
+        float scaleX = (right - left) / (float) srcW;
+        float scaleY = (bottom - top) / (float) srcH;
+        // Cache tiles-per-screen-pixel for onScroll to convert drag deltas
+        // by - reusing tilesPerPixelX/Y even though this view's "tiles" are
+        // really just 8px units of real room pixels, matching drawMap's
+        // own convention closely enough for onScroll's shared handling.
+        tilesPerPixelX = 1f / (scaleX * 8);
+        tilesPerPixelY = 1f / (scaleY * 8);
+
+        int sxFull = GameState.getSamusX(), syFull = GameState.getSamusY();
+        float samusPxX = sxFull;
+        float samusPxY = syFull;
+        if (samusPxX >= srcLeft && samusPxX < srcLeft + srcW && samusPxY >= srcTop && samusPxY < srcTop + srcH) {
+            float cx = left + (samusPxX - srcLeft) * scaleX;
+            float cy = top + (samusPxY - srcTop) * scaleY;
+            float radius = Math.min(scaleX, scaleY) * 6f;
+            canvas.drawCircle(cx, cy, radius, samusDotPaint);
+            canvas.drawCircle(cx, cy, radius, samusRingPaint);
+        }
+    }
+
     // Recomputes exploredMinX/Y/MaxX/Y (half-open) from exploredGrid. Falls
     // back to the whole grid if nothing's explored yet (shouldn't normally
     // happen once gameplay starts, but keeps the auto-fit math sane if it
@@ -1075,6 +1279,37 @@ public class MapStatusView extends View {
 
         float cx2 = zoomOutBtn.centerX(), cy2 = zoomOutBtn.centerY();
         canvas.drawLine(cx2 - half, cy2, cx2 + half, cy2, zoomBtnIconPaint);
+    }
+
+    // Schematic-vs-real-texture mode toggle button - a small square icon
+    // suggesting "photo/image" (a picture-frame rectangle) when real-
+    // texture mode is available to switch INTO, filled solid (accent
+    // color) when it's currently active, so the button's own look tells
+    // you which mode you're in without needing a text label.
+    private void drawRealTextureButton(Canvas canvas) {
+        float r = Math.min(realTextureBtn.width(), realTextureBtn.height()) * 0.3f;
+        canvas.drawRoundRect(realTextureBtn, r, r, realTextureMode ? tabActiveBgPaint : zoomBtnBgPaint);
+        if (realTextureMode) {
+            canvas.drawRoundRect(realTextureBtn, r, r, tabActiveBorderPaint);
+        }
+        float pad = realTextureBtn.width() * 0.28f;
+        RectF icon = new RectF(realTextureBtn.left + pad, realTextureBtn.top + pad,
+                realTextureBtn.right - pad, realTextureBtn.bottom - pad);
+        canvas.drawRect(icon, zoomBtnIconPaint);
+    }
+
+    // Recenter/reset-camera button - a crosshair-in-a-box icon, snaps
+    // roomArtPanX/Y back to 0 (Samus-centered) on tap. Only relevant (and
+    // only drawn) in real-texture mode, since the schematic view already
+    // has its own Samus-centered baseline with no separate reset needed.
+    private void drawResetCameraButton(Canvas canvas) {
+        float r = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.3f;
+        canvas.drawRoundRect(resetCameraBtn, r, r, zoomBtnBgPaint);
+        float half = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.22f;
+        float cx = resetCameraBtn.centerX(), cy = resetCameraBtn.centerY();
+        canvas.drawLine(cx - half, cy, cx + half, cy, zoomBtnIconPaint);
+        canvas.drawLine(cx, cy - half, cx, cy + half, zoomBtnIconPaint);
+        canvas.drawCircle(cx, cy, half * 1.5f, zoomBtnIconPaint);
     }
 
     private static int clampInt(int v, int lo, int hi) {
@@ -1424,7 +1659,13 @@ public class MapStatusView extends View {
         int fillColor = darken(blend, 0.35f) | 0xFF000000;
         int borderColor = darken(blend, 0.6f) | 0xFF000000;
         rasterizeThickLine(ax, ay, bx, by, CONNECTOR_HALF_WIDTH, fillColor);
-        rasterizeThickLine(ax, ay, bx, by, CONNECTOR_HALF_WIDTH - 1.5f, borderColor);
+        // Border inset is a fixed ~0.7px trim (matching the thin wall
+        // border seen in real decoded room art, roughly 1 source pixel
+        // relative to typical room width - not proportional to
+        // CONNECTOR_HALF_WIDTH, which previously made the border read as a
+        // thick outline rather than a wall) rather than the connector's own
+        // half-width, so it stays a thin trim regardless of tube width.
+        rasterizeThickLine(ax, ay, bx, by, CONNECTOR_HALF_WIDTH - 0.7f, borderColor);
         worldCompositeBitmap.setPixels(worldCompositePixels, 0, WORLD_CANVAS_PX_W, 0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
     }
 
