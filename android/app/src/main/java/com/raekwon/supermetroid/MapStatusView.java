@@ -352,6 +352,14 @@ public class MapStatusView extends View {
     // more detailed than the panel can show at once even zoomed to fit.
     // Reset on room change so entering a new room always starts centered.
     private float roomArtPanX = 0f, roomArtPanY = 0f;
+    // Zoom on top of the auto-fit "whole room" baseline fitScale in
+    // drawRoomArt - 1.0 shows the whole room (fitScale as-is), >1 zooms in
+    // (matching zoomFactor's own convention for the schematic map), so the
+    // shared pinch/+-button handlers can scale this the same way. Reset on
+    // room change alongside roomArtPanX/Y for the same reason.
+    private static final float MIN_ROOM_ART_ZOOM = 1f;
+    private static final float MAX_ROOM_ART_ZOOM = 8f;
+    private float roomArtZoom = MIN_ROOM_ART_ZOOM;
 
     // ---- Equipment tab ----
     // Grouped text-list layout matching SM's real pause-menu "SAMUS"
@@ -476,6 +484,11 @@ public class MapStatusView extends View {
         scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
+                if (realTextureMode) {
+                    float prospective = roomArtZoom * detector.getScaleFactor();
+                    roomArtZoom = Math.max(MIN_ROOM_ART_ZOOM, Math.min(MAX_ROOM_ART_ZOOM, prospective));
+                    return true;
+                }
                 if (worldView) {
                     float prospective = worldZoomFactor * detector.getScaleFactor();
                     if (prospective > MAX_WORLD_ZOOM) {
@@ -508,6 +521,12 @@ public class MapStatusView extends View {
         tapDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
+                if (realTextureMode) {
+                    roomArtZoom = MIN_ROOM_ART_ZOOM;
+                    roomArtPanX = 0f;
+                    roomArtPanY = 0f;
+                    return true;
+                }
                 worldView = false;
                 zoomFactor = DEFAULT_ZOOM;
                 panOffsetX = 0f;
@@ -724,7 +743,13 @@ public class MapStatusView extends View {
         } else if (action == MotionEvent.ACTION_UP && zoomButtonPointerId != -1) {
             RectF btn = zoomButtonIsIn ? zoomInBtn : zoomOutBtn;
             if (btn.contains(event.getX(), event.getY())) {
-                if (zoomButtonIsIn) {
+                if (realTextureMode) {
+                    if (zoomButtonIsIn) {
+                        roomArtZoom = Math.min(MAX_ROOM_ART_ZOOM, roomArtZoom * ZOOM_BUTTON_STEP);
+                    } else {
+                        roomArtZoom = Math.max(MIN_ROOM_ART_ZOOM, roomArtZoom / ZOOM_BUTTON_STEP);
+                    }
+                } else if (zoomButtonIsIn) {
                     if (worldView) {
                         float prospective = worldZoomFactor * ZOOM_BUTTON_STEP;
                         if (prospective > MAX_WORLD_ZOOM) {
@@ -1183,6 +1208,7 @@ public class MapStatusView extends View {
                 // frames even if the player had manually panned around.
                 roomArtPanX = 0f;
                 roomArtPanY = 0f;
+                roomArtZoom = MIN_ROOM_ART_ZOOM;
             }
         }
 
@@ -1204,7 +1230,11 @@ public class MapStatusView extends View {
         // roomArtPanX/Y (drag-adjusted, reset on room change) becomes
         // useful, since that cropped axis is real room content you can
         // now pan across instead of seeing a distorted whole-room fit.
-        float fitScale = Math.max(availW / roomArtPxW, availH / roomArtPxH);
+        // roomArtZoom (1.0 = whole room, matching MIN_ROOM_ART_ZOOM) zooms
+        // in further on top of the whole-room fit - a bigger fitScale means
+        // a SMALLER viewW/viewH (less source room shown per screen pixel),
+        // so it divides rather than multiplies here.
+        float fitScale = Math.max(availW / roomArtPxW, availH / roomArtPxH) * roomArtZoom;
         float viewW = availW / fitScale, viewH = availH / fitScale;
 
         // Center on Samus's own live position (matching drawMap's own
