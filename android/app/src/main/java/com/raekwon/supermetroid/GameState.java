@@ -66,6 +66,12 @@ public class GameState {
     // pass getEquippedItems()'s own return value.
     public static native boolean renderSamusWireframe(int equippedItems, int[] out);
 
+    // Same as renderSamusWireframe, but the "Redux Suit" full-color art
+    // (extracted from the Super-Metroid-Redux project's own ROM and
+    // embedded in the app) instead of vanilla's green wireframe. Always
+    // succeeds - the art is fully bundled, no ROM/live-game dependency.
+    public static native boolean renderReduxSuit(int equippedItems, int[] out);
+
     // Renders the real in-game area-name label graphic (12 tiles x 1 tile =
     // 96x8px) for the given area index. out must be length >= 96*8.
     public static native boolean renderAreaLabel(int area, int[] out);

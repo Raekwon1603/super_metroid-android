@@ -278,6 +278,14 @@ JNIEXPORT jboolean JNICALL JFN(renderSamusWireframe)(JNIEnv *env, jclass clazz, 
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(renderReduxSuit)(JNIEnv *env, jclass clazz, jint equippedItems, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 64 * 136) return JNI_FALSE;
+  if (!SM2_RenderReduxSuit(equippedItems, g_wireframe_px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 64 * 136, (jint *)g_wireframe_px);
+  return JNI_TRUE;
+}
+
 // kSM2RoomArtMaxW x kSM2RoomArtMaxH ARGB8888 scratch buffer - too large to
 // put on the stack safely, same reasoning as g_map_px above (16MB at the
 // full 2048x2048 cap, so definitely not stack-local).

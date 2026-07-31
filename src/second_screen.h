@@ -128,6 +128,14 @@ bool SM2_RenderBeamIcon(int bit, uint32 *out);
 // index 0 is left transparent. Returns false if the ROM isn't loaded yet.
 bool SM2_RenderSamusWireframe(int equipped_items_value, uint32 *out);
 
+// Same as SM2_RenderSamusWireframe, but using the "Redux Suit" full-color
+// art (see redux_suit_data.h) instead of vanilla's green wireframe -
+// extracted from the real Super-Metroid-Redux ROM, not this app's own ROM,
+// so it works the same regardless of which vanilla ROM the player loaded.
+// Never returns false (no ROM/live-game dependency - the art is fully
+// embedded), unlike SM2_RenderSamusWireframe.
+bool SM2_RenderReduxSuit(int equipped_items_value, uint32 *out);
+
 // Renders the actual gameplay-HUD missile icon (the small tank glyph shown
 // next to the ammo count during normal play - kHudTilemaps_Missiles in
 // sm_80.c) into a 24x16 ARGB8888 buffer (out must be 24*16 = 384 uint32s).

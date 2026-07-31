@@ -942,18 +942,23 @@ public class MapStatusView extends View {
         drawWireframeCallouts(canvas, wireframeDest, leftBoxes[0], leftBoxes[1], rightBoxes[0], rightBoxes[1]);
     }
 
-    // Draws the real pause-menu wireframe Samus body graphic, centered in
-    // the given rect at its native aspect ratio (no stretch). Re-decoded
-    // only when equipped_items actually changes (a new suit is collected),
-    // since the ROM data behind a given suit-state combo never changes
-    // otherwise - same lazy-cache idea as the missile/super/PB icons.
-    // Returns the actual drawn rect (may be narrower/shorter than the given
-    // w/h since the aspect ratio is preserved) so drawWireframeCallouts can
-    // anchor lines to real points on the sprite.
+    // Draws Samus's equipment-screen body graphic, centered in the given
+    // rect at its native aspect ratio (no stretch). Uses the "Redux Suit"
+    // full-color art (renderReduxSuit - extracted from the real
+    // Super-Metroid-Redux ROM, see redux_suit_data.h) instead of vanilla's
+    // flat green wireframe (renderSamusWireframe, still available natively
+    // but no longer called here) - same 64x136 layout and 4-variant
+    // suit-state selection either way, so no other layout math changes.
+    // Re-decoded only when equipped_items actually changes (a new suit is
+    // collected), since the art behind a given suit-state combo never
+    // changes otherwise - same lazy-cache idea as the missile/super/PB
+    // icons. Returns the actual drawn rect (may be narrower/shorter than
+    // the given w/h since the aspect ratio is preserved) so
+    // drawWireframeCallouts can anchor lines to real points on the sprite.
     private RectF drawWireframe(Canvas canvas, float x, float top, float w, float h) {
         int equippedItems = GameState.getEquippedItems();
         if (equippedItems != wireframeCachedEquippedItems
-                && GameState.renderSamusWireframe(equippedItems, wireframePixels)) {
+                && GameState.renderReduxSuit(equippedItems, wireframePixels)) {
             wireframeBitmap.setPixels(wireframePixels, 0, WIREFRAME_PX_W, 0, 0, WIREFRAME_PX_W, WIREFRAME_PX_H);
             wireframeCachedEquippedItems = equippedItems;
         }

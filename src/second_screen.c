@@ -4,6 +4,7 @@
 #include "variables.h"
 #include "sm_rtl.h"
 #include "funcs.h"
+#include "redux_suit_data.h"
 #ifdef __ANDROID__
 #include <android/log.h>
 #endif
@@ -370,6 +371,49 @@ bool SM2_RenderSamusWireframe(int equipped_items_value, uint32 *out) {
           int ci = Snes4bppColorIndex(tile, sx, sy);
           if (ci == 0) continue;
           uint16 color15 = kPauseScreenPalettes[palette_row * 16 + ci];
+          out[(row * 8 + py) * (kWireframeTilesW * 8) + col * 8 + px] = Snes15ToArgb(color15);
+        }
+      }
+    }
+  }
+  return true;
+}
+
+// Same 64x136 equipment-screen graphic as SM2_RenderSamusWireframe, but
+// using the "Redux Suit" full-color art (redux_suit_data.h - extracted
+// directly from the real, pre-built Super-Metroid-Redux ROM, see that
+// header's own comment) instead of vanilla's flat green wireframe. Redux
+// kept the exact same 4-variant selection scheme as vanilla
+// (key = equipped_items & 0x101, order: none/Gravity/Varia/both - see
+// redux_suit_data.h), so the variant index is just that same key's linear
+// position, no separate lookup table needed for this data.
+bool SM2_RenderReduxSuit(int equipped_items_value, uint32 *out) {
+  memset(out, 0, sizeof(uint32) * kWireframeTilesW * 8 * kWireframeTilesH * 8);
+
+  static const int kKeys[4] = {0x0, 0x100, 0x1, 0x101};
+  int key = equipped_items_value & 0x101;
+  int variant = 0;
+  while (variant < 4 && kKeys[variant] != key) variant++;
+  if (variant == 4) variant = 0;
+
+  const uint16 *src = kReduxSuitTilemaps[variant];
+  for (int row = 0; row < kWireframeTilesH; row++) {
+    for (int col = 0; col < kWireframeTilesW; col++) {
+      uint16 entry = *src++;
+      int tile_index = entry & 0x3FF;
+      int palette_row = (entry >> 10) & 7;
+      bool flip_x = (entry & 0x4000) != 0;
+      bool flip_y = (entry & 0x8000) != 0;
+      if (tile_index >= kReduxSuitTileCount || palette_row >= kReduxSuitPaletteRowCount) continue;
+
+      const uint8 *tile = kReduxSuitTiles + tile_index * 32;
+      for (int py = 0; py < 8; py++) {
+        int sy = flip_y ? 7 - py : py;
+        for (int px = 0; px < 8; px++) {
+          int sx = flip_x ? 7 - px : px;
+          int ci = Snes4bppColorIndex(tile, sx, sy);
+          if (ci == 0) continue;
+          uint16 color15 = kReduxSuitPalette[palette_row * 16 + ci];
           out[(row * 8 + py) * (kWireframeTilesW * 8) + col * 8 + px] = Snes15ToArgb(color15);
         }
       }
