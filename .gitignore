@@ -11,6 +11,7 @@ SDL2.dll
 /sm.exe
 /glsl-shaders/
 *.sfc
+/.vscode
 
 # Android
 android/local.properties
@@ -20,3 +21,4 @@ android/*.iml
 android/app/.cxx/
 android/app/build/
 android/build/
+

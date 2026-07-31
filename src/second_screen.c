@@ -4,6 +4,9 @@
 #include "variables.h"
 #include "sm_rtl.h"
 #include "funcs.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 // Same ROM addresses LoadPauseMenuMapTilemap (sm_82.c) uses to build the
 // in-game pause-menu map screen - redefined locally here the same way
@@ -644,6 +647,14 @@ static uint8 s_level_data_canary[kCanarySize];
 // unlike the other three buffers, its size can't vary with room content.
 static uint16 s_room_palette[256];
 
+// Scratch for the current area's explored-tile grid (64x32, same layout as
+// SM2_DecodeExploredGrid), refreshed once per SM2_RenderCurrentRoomArt call
+// and used to gate which of the room's own metatile cells CompositeRoomLayer
+// actually draws - see its own comment for why (unexplored parts of the
+// current room must stay hidden, same rule the schematic map already
+// enforces).
+static uint8 s_explored_grid[64 * 32];
+
 // Renders one 8x8 subtile (from a TileTable corner word) into out at
 // (ox,oy), skipping tiles that are entirely blank (all 64 pixels index 0 -
 // SM's real "no art here" placeholder tiles are built this way; ordinary
@@ -697,13 +708,38 @@ static void RenderRoomSubtile(uint32 *out, int out_w, int out_h, uint16 sub_word
 // Composites one BG layer's tilemap (level_data or custom_background) into
 // out, grid_w x grid_h metatiles (16x16px each). Mirrors DrawPlmTilemap's
 // own combined-flip corner-swap convention (sm_84.c:868-893).
+//
+// explored (may be NULL to skip the check entirely) is the 64x32 world
+// explored-tile grid (SM2_DecodeExploredGrid's own layout - 1 byte per
+// map tile, row-major, out[y*64+x]); map_x0/map_y0 are this room's own
+// placement within that same grid (room_x_coordinate_on_map/
+// room_y_coordinate_on_map, +1 on Y - see SM2_RenderCurrentRoomArt's own
+// comment). That world grid is SCREEN granularity (1 cell = 1 real 256x256
+// SNES screen = 16x16 of this function's own 16px metatile cells), NOT
+// metatile granularity, matching how SM actually reveals the map (a whole
+// screen at a time when you enter it) - confirmed via a live repro
+// showing only 5 explored cells total for Landing Site's real, heavily-
+// explored starting room, forming exactly a 1-screen-wide x 5-screen-tall
+// strip matching its own w=9 h=5 screen dimensions. So gx/gy (in
+// metatile/block units) need /16 before indexing into it, not used
+// directly. Cells in an unexplored screen are left untouched (transparent,
+// out already zeroed by the caller) instead of composited, so real-texture
+// mode can't be used to see hidden paths/items/room layout ahead of
+// actually exploring it - the same reveal-as-you-go rule the schematic
+// map already enforces via SM2_RenderAreaMap's own explored gate.
 static void CompositeRoomLayer(uint32 *out, int out_w, int out_h, const uint16 *words,
-                                int n_words, int grid_w, int grid_h) {
+                                int n_words, int grid_w, int grid_h,
+                                const uint8 *explored, int map_x0, int map_y0) {
   int cells = grid_w * grid_h;
   if (cells > n_words) cells = n_words;
   for (int i = 0; i < cells; i++) {
     uint16 word = words[i];
     int gx = i % grid_w, gy = i / grid_w;
+    if (explored) {
+      int mx = map_x0 + (gx >> 4), my = map_y0 + (gy >> 4);
+      bool tile_explored = mx >= 0 && mx < 64 && my >= 0 && my < 32 && explored[my * 64 + mx];
+      if (!tile_explored) continue;
+    }
     int metatile_idx = word & 0x3FF;
     bool meta_flip_x = (word & 0x4000) != 0;
     bool meta_flip_y = (word & 0x8000) != 0;
@@ -798,9 +834,13 @@ bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used
   // from (and let the caller display) a render that's already coincided
   // with memory corruption elsewhere. See s_level_data_buf's own comment
   // for the two real crashes this exact failure mode already caused.
-  if (!DecompressBoundsOk(s_room_tiles_canary) ||
-      !DecompressBoundsOk(s_cre_tiles_canary) ||
-      !DecompressBoundsOk(s_level_data_canary)) {
+  bool room_ok = DecompressBoundsOk(s_room_tiles_canary);
+  bool cre_ok = DecompressBoundsOk(s_cre_tiles_canary);
+  bool level_ok = DecompressBoundsOk(s_level_data_canary);
+  if (!room_ok || !cre_ok || !level_ok) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "SM2Crash", "canary fail room=%d cre=%d level=%d", room_ok, cre_ok, level_ok);
+#endif
     SM2_UnlockGameState();
     return false;
   }
@@ -808,7 +848,17 @@ bool SM2_RenderCurrentRoomArt(uint32 *out, int out_w, int out_h, int *out_w_used
   int grid_w = room_width_in_blocks, grid_h = room_height_in_blocks;
   int n_words = grid_w * grid_h;
   const uint16 *bg1_words = (const uint16 *)(s_level_data_buf + 2);
-  CompositeRoomLayer(out, out_w, out_h, bg1_words, n_words, grid_w, grid_h);
+  SM2_DecodeExploredGrid(s_explored_grid);
+  // +1 on the Y origin only - the same offset MarkMapTileAsExplored
+  // (sm_90.c: room_y_coordinate_on_map + ... + 1) and SM2_GetSamusMapTile
+  // both apply when converting room_y_coordinate_on_map into this same
+  // explored-tile grid's row space (room_x_coordinate_on_map needs no such
+  // adjustment, only Y). CompositeRoomLayer itself further divides by 16
+  // to go from this function's block/metatile units to the explored
+  // grid's own screen units - see its own comment for why (confirmed via
+  // a live repro against Landing Site's real explored state).
+  CompositeRoomLayer(out, out_w, out_h, bg1_words, n_words, grid_w, grid_h,
+                      s_explored_grid, room_x_coordinate_on_map, room_y_coordinate_on_map + 1);
   SM2_UnlockGameState();
   return true;
 }

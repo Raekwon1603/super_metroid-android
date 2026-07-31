@@ -340,6 +340,12 @@ public class MapStatusView extends View {
     private int roomArtPxW = 0, roomArtPxH = 0;
     private int roomArtCachedRoom = -1;
     private boolean haveRoomArt = false;
+    // Separate from frameCounter (which only increments in drawMap, never
+    // called while real-texture mode is on) - lets drawRoomArt re-decode
+    // periodically like the schematic map's own REFRESH_INTERVAL does, to
+    // pick up newly-explored screens revealed while standing in a big,
+    // multi-screen room without having to leave and re-enter it.
+    private int roomArtFrameCounter = 0;
     // Manual drag pan (real room pixel units), added on top of the auto-fit
     // "whole room" baseline - lets you look around the full room instead of
     // being locked to Samus's own position, since a real room is often far
@@ -1149,7 +1155,9 @@ public class MapStatusView extends View {
     // pause-map grid to place her against.
     private void drawRoomArt(Canvas canvas, float left, float top, float right, float bottom) {
         int room = GameState.getRoom();
-        if (room != roomArtCachedRoom) {
+        roomArtFrameCounter++;
+        boolean roomChanged = room != roomArtCachedRoom;
+        if (roomChanged || roomArtFrameCounter % REFRESH_INTERVAL == 0) {
             if (GameState.renderCurrentRoomArt(roomArtPixels, roomArtDims)) {
                 roomArtPxW = Math.min(roomArtDims[0], GameState.ROOM_ART_MAX_W);
                 roomArtPxH = Math.min(roomArtDims[1], GameState.ROOM_ART_MAX_H);
@@ -1166,11 +1174,16 @@ public class MapStatusView extends View {
                 haveRoomArt = false;
             }
             roomArtCachedRoom = room;
-            // A pan offset from the previous room's own pixel space is
-            // meaningless here - always start a freshly-entered room
-            // centered on its own whole-room view.
-            roomArtPanX = 0f;
-            roomArtPanY = 0f;
+            if (roomChanged) {
+                // A pan offset from the previous room's own pixel space is
+                // meaningless here - always start a freshly-entered room
+                // centered on its own whole-room view. Only reset on an
+                // actual room change, not every periodic refresh - otherwise
+                // the camera would snap back to center every REFRESH_INTERVAL
+                // frames even if the player had manually panned around.
+                roomArtPanX = 0f;
+                roomArtPanY = 0f;
+            }
         }
 
         if (!haveRoomArt) {
