@@ -7,8 +7,6 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.Typeface;
-import android.os.Build;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -263,6 +261,19 @@ public class MapStatusView extends View {
 
     private static final int COL_BG = Color.rgb(13, 15, 23);
     private static final int COL_ACCENT = Color.rgb(255, 158, 68);
+    // Named palette for the SNES-menu-style bordered boxes (drawPixelBox)
+    // and pixel-font text - consolidates what used to be inline
+    // Color.rgb(...) literals scattered across the draw methods, plus one
+    // new tone (COL_BORDER_HIGHLIGHT) for the box bevel effect.
+    private static final int COL_PANEL_BG = Color.rgb(20, 22, 32);
+    private static final int COL_BORDER_DARK = Color.rgb(45, 50, 70);
+    private static final int COL_BORDER_HIGHLIGHT = Color.rgb(100, 108, 140);
+    private static final int COL_LABEL_GRAY = Color.rgb(150, 155, 175);
+    private static final int COL_TAB_ACTIVE_BG = Color.rgb(40, 44, 62);
+    private static final int COL_TAB_LABEL = Color.rgb(200, 204, 220);
+    private static final int COL_SLOT_BG = Color.rgb(30, 33, 46);
+    private static final int COL_DIM_GRAY = Color.rgb(90, 94, 110);
+    private static final int COL_SAMUS_DOT = Color.rgb(255, 70, 70);
 
     private static final String LOGO_TEXT = "METROID";
 
@@ -294,21 +305,16 @@ public class MapStatusView extends View {
     private final Paint samusDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelBitmapPaint = new Paint();
     private final Paint dimPaint = new Paint();
-    private final Paint logoTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint zoomBtnBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint panelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint panelBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint hudTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint hudLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint tabBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint tabActiveBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint tabActiveBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint tabLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint slotBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint slotSelectedBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint slotDimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // Reused by drawPixelBox for its fill/border/highlight/corner strokes -
+    // one mutable Paint instead of allocating new ones per box per frame.
+    private final Paint pixelBoxPaint = new Paint();
+    // Leader/callout lines from the wireframe Samus to each equipment box
+    // (drawWireframeCallouts) - soft accent, semi-transparent so it doesn't
+    // fight the wireframe's own bright green linework.
+    private final Paint calloutLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final int[] missileIconPixels = new int[24 * 16];
     private Bitmap missileIconBitmap;
@@ -562,53 +568,28 @@ public class MapStatusView extends View {
         samusRingPaint.setColor(Color.WHITE);
         samusRingPaint.setStyle(Paint.Style.STROKE);
         samusRingPaint.setStrokeWidth(2.5f);
-        samusDotPaint.setColor(Color.rgb(255, 70, 70));
+        samusDotPaint.setColor(COL_SAMUS_DOT);
 
         labelBitmapPaint.setFilterBitmap(false);  // crisp pixel-art scaling, no blur
         labelBitmapPaint.setAlpha(150);  // translucent - identifies the area without covering the room layout under it
 
         dimPaint.setColor(Color.BLACK);
 
-        logoTextPaint.setColor(COL_ACCENT);
-        logoTextPaint.setFakeBoldText(true);
-        logoTextPaint.setTextAlign(Paint.Align.CENTER);
-        if (Build.VERSION.SDK_INT >= 21) {
-            logoTextPaint.setLetterSpacing(0.18f);
-        }
         logoLinePaint.setColor(COL_ACCENT);
         logoLinePaint.setStrokeWidth(3);
 
-        zoomBtnBgPaint.setColor(Color.BLACK);
-        zoomBtnBgPaint.setAlpha(140);
         zoomBtnIconPaint.setColor(Color.WHITE);
         zoomBtnIconPaint.setStrokeWidth(4);
         zoomBtnIconPaint.setStrokeCap(Paint.Cap.ROUND);
 
-        panelBgPaint.setColor(Color.rgb(20, 22, 32));
-        panelBorderPaint.setColor(Color.rgb(60, 66, 90));
+        panelBorderPaint.setColor(COL_BORDER_DARK);
         panelBorderPaint.setStyle(Paint.Style.STROKE);
+        panelBorderPaint.setStrokeWidth(3f);
 
-        hudTextPaint.setColor(Color.WHITE);
-        hudTextPaint.setTextAlign(Paint.Align.LEFT);
-        hudTextPaint.setTypeface(Typeface.MONOSPACE);
-        hudLabelPaint.setColor(Color.rgb(150, 155, 175));
-        hudLabelPaint.setTextAlign(Paint.Align.LEFT);
-        hudLabelPaint.setTypeface(Typeface.MONOSPACE);
-
-        tabBgPaint.setColor(Color.rgb(20, 22, 32));
-        tabActiveBgPaint.setColor(Color.rgb(40, 44, 62));
-        tabActiveBorderPaint.setColor(COL_ACCENT);
-        tabActiveBorderPaint.setStyle(Paint.Style.STROKE);
-        tabLabelPaint.setColor(Color.rgb(200, 204, 220));
-        tabLabelPaint.setTextAlign(Paint.Align.CENTER);
-        tabLabelPaint.setTypeface(Typeface.MONOSPACE);
-        tabLabelPaint.setFakeBoldText(true);
-
-        slotBgPaint.setColor(Color.rgb(30, 33, 46));
-        slotSelectedBorderPaint.setColor(COL_ACCENT);
-        slotSelectedBorderPaint.setStyle(Paint.Style.STROKE);
-        slotDimPaint.setColor(Color.rgb(30, 33, 46));
-        slotDimPaint.setAlpha(140);
+        calloutLinePaint.setColor(COL_ACCENT);
+        calloutLinePaint.setAlpha(160);
+        calloutLinePaint.setStyle(Paint.Style.STROKE);
+        calloutLinePaint.setStrokeWidth(2f);
 
         // The map bitmap is native 8px/tile SNES art scaled way up on
         // screen - keep it crisp/unfiltered (same as the label/room
@@ -728,13 +709,23 @@ public class MapStatusView extends View {
         } else if (action == MotionEvent.ACTION_UP && ammoTouchPointerId != -1) {
             float x = event.getX(), y = event.getY();
             int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
+            int currentlySelected = GameState.getSelectedAmmo();
             for (int i = 0; i < ammoSlotRects.length; i++) {
                 if (ammoSlotRects[i].contains(x, y)) {
                     // Only a collected (max > 0) ammo type can actually be
                     // armed - mirrors the real Select-button handler
                     // (SwitchToHudHandler_* in sm_90.c), which skips over
                     // unowned slots rather than letting them be selected.
-                    if (maxCounts[i] > 0) GameState.setSelectedAmmo(AMMO_SLOTS[i]);
+                    // Tapping the ALREADY-selected slot instead deselects it
+                    // (back to AMMO_NONE/plain beam) - on real hardware,
+                    // undoing a Select-button arm means cycling Select
+                    // through every other slot until you land back on
+                    // "none"; a direct second tap here is a much faster
+                    // shortcut to the same end state, not a new game rule.
+                    if (maxCounts[i] > 0) {
+                        boolean alreadySelected = currentlySelected == AMMO_SLOTS[i];
+                        GameState.setSelectedAmmo(alreadySelected ? GameState.AMMO_NONE : AMMO_SLOTS[i]);
+                    }
                     break;
                 }
             }
@@ -801,8 +792,7 @@ public class MapStatusView extends View {
 
         if (!nativeBroken) {
             try {
-                float r = Math.min(panelRect.width(), panelRect.height()) * 0.025f;
-                canvas.drawRoundRect(panelRect, r, r, panelBgPaint);
+                drawPixelBox(canvas, panelRect, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
 
                 switch (currentTab) {
                     case MAP:
@@ -838,7 +828,13 @@ public class MapStatusView extends View {
                         drawAmmoTab(canvas);
                         break;
                 }
-                canvas.drawRoundRect(panelRect, r, r, panelBorderPaint);
+                // Re-stroke the border on top of whatever tab content just
+                // drew, same as the original draw order - keeps the panel's
+                // own frame from ever being covered by map/room-art bitmaps
+                // that fill right up to panelRect's edges.
+                float panelR = Math.min(panelRect.width(), panelRect.height()) * 0.02f + 1.5f;
+                canvas.drawRect(panelRect.left + panelR / 2f, panelRect.top + panelR / 2f,
+                        panelRect.right - panelR / 2f, panelRect.bottom - panelR / 2f, panelBorderPaint);
                 if (currentTab == Tab.MAP) {
                     drawZoomButtons(canvas);
                     drawRealTextureButton(canvas);
@@ -868,14 +864,13 @@ public class MapStatusView extends View {
         for (int i = 0; i < 3; i++) {
             RectF rect = tabButtonRects[i];
             boolean active = currentTab.ordinal() == i;
-            float r = rect.height() * 0.22f;
-            canvas.drawRoundRect(rect, r, r, active ? tabActiveBgPaint : tabBgPaint);
-            if (active) {
-                canvas.drawRoundRect(rect, r, r, tabActiveBorderPaint);
-            }
-            tabLabelPaint.setTextSize(rect.height() * 0.4f);
-            float ty = rect.centerY() + tabLabelPaint.getTextSize() * 0.35f;
-            canvas.drawText(TAB_LABELS[i], rect.centerX(), ty, tabLabelPaint);
+            int fill = active ? COL_TAB_ACTIVE_BG : COL_PANEL_BG;
+            int border = active ? COL_ACCENT : COL_BORDER_DARK;
+            drawPixelBox(canvas, rect, fill, border, COL_BORDER_HIGHLIGHT, true);
+
+            float textSize = rect.height() * 0.4f;
+            PixelFont.drawText(canvas, TAB_LABELS[i], rect.centerX(), rect.centerY() - textSize / 2f,
+                    PixelFont.pixelSizeForHeight(textSize), COL_TAB_LABEL, Paint.Align.CENTER);
         }
     }
 
@@ -885,6 +880,43 @@ public class MapStatusView extends View {
     // bullet marker showing collected/not-collected, matching the
     // reference photo's own look exactly (no icons - see EQUIP_GROUPS's
     // comment on why icons were dropped).
+    // SNES-menu-style bordered box: solid fill, a dark outer border, a
+    // lighter "highlight" bevel on the top+left inner edge, and (unless
+    // simple=true) small solid corner-accent squares - replaces the plain
+    // drawRoundRect look used everywhere previously. simple=true skips the
+    // corner accents for small controls (zoom/texture/reset buttons) where
+    // they'd look cluttered rather than deliberate.
+    private void drawPixelBox(Canvas canvas, RectF rect, int fillColor, int borderColor,
+                               int highlightColor, boolean simple) {
+        float inset = Math.min(rect.width(), rect.height()) * 0.02f + 1.5f;
+        pixelBoxPaint.setStyle(Paint.Style.FILL);
+        pixelBoxPaint.setColor(fillColor);
+        canvas.drawRect(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset, pixelBoxPaint);
+
+        pixelBoxPaint.setStyle(Paint.Style.STROKE);
+        pixelBoxPaint.setStrokeWidth(inset);
+        pixelBoxPaint.setColor(borderColor);
+        canvas.drawRect(rect.left + inset / 2f, rect.top + inset / 2f, rect.right - inset / 2f, rect.bottom - inset / 2f, pixelBoxPaint);
+
+        // Bevel highlight: top and left inner edges only, one step further
+        // inset than the border itself.
+        pixelBoxPaint.setStrokeWidth(inset * 0.6f);
+        pixelBoxPaint.setColor(highlightColor);
+        float hi = inset * 1.6f;
+        canvas.drawLine(rect.left + hi, rect.top + hi, rect.right - hi, rect.top + hi, pixelBoxPaint);
+        canvas.drawLine(rect.left + hi, rect.top + hi, rect.left + hi, rect.bottom - hi, pixelBoxPaint);
+
+        if (!simple) {
+            float accent = Math.max(3f, inset * 1.8f);
+            pixelBoxPaint.setStyle(Paint.Style.FILL);
+            pixelBoxPaint.setColor(borderColor);
+            canvas.drawRect(rect.left, rect.top, rect.left + accent, rect.top + accent, pixelBoxPaint);
+            canvas.drawRect(rect.right - accent, rect.top, rect.right, rect.top + accent, pixelBoxPaint);
+            canvas.drawRect(rect.left, rect.bottom - accent, rect.left + accent, rect.bottom, pixelBoxPaint);
+            canvas.drawRect(rect.right - accent, rect.bottom - accent, rect.right, rect.bottom, pixelBoxPaint);
+        }
+    }
+
     private void drawEquipmentTab(Canvas canvas) {
         float pad = panelRect.width() * 0.03f;
         float left = panelRect.left + pad, right = panelRect.right - pad;
@@ -900,10 +932,14 @@ public class MapStatusView extends View {
         float wireframeW = Math.min((right - left) * 0.26f, (bottom - top) * wireframeAspect);
         float colW = (right - left - colGap * 2 - wireframeW) / 2f;
 
-        drawEquipColumn(canvas, left, top, colW, bottom - top, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
-        drawWireframe(canvas, left + colW + colGap, top, wireframeW, bottom - top);
-        drawEquipColumn(canvas, left + colW + colGap + wireframeW + colGap, top, colW, bottom - top,
+        RectF[] leftBoxes = drawEquipColumn(canvas, left, top, colW, bottom - top, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
+        RectF wireframeDest = drawWireframe(canvas, left + colW + colGap, top, wireframeW, bottom - top);
+        RectF[] rightBoxes = drawEquipColumn(canvas, left + colW + colGap + wireframeW + colGap, top, colW, bottom - top,
                 new EquipGroup[] { EQUIP_BOOTS, EQUIP_BEAM });
+
+        // leftBoxes = {SUIT, MISC}, rightBoxes = {BOOTS, BEAM} - matches the
+        // group arrays passed into drawEquipColumn just above.
+        drawWireframeCallouts(canvas, wireframeDest, leftBoxes[0], leftBoxes[1], rightBoxes[0], rightBoxes[1]);
     }
 
     // Draws the real pause-menu wireframe Samus body graphic, centered in
@@ -911,7 +947,10 @@ public class MapStatusView extends View {
     // only when equipped_items actually changes (a new suit is collected),
     // since the ROM data behind a given suit-state combo never changes
     // otherwise - same lazy-cache idea as the missile/super/PB icons.
-    private void drawWireframe(Canvas canvas, float x, float top, float w, float h) {
+    // Returns the actual drawn rect (may be narrower/shorter than the given
+    // w/h since the aspect ratio is preserved) so drawWireframeCallouts can
+    // anchor lines to real points on the sprite.
+    private RectF drawWireframe(Canvas canvas, float x, float top, float w, float h) {
         int equippedItems = GameState.getEquippedItems();
         if (equippedItems != wireframeCachedEquippedItems
                 && GameState.renderSamusWireframe(equippedItems, wireframePixels)) {
@@ -927,9 +966,12 @@ public class MapStatusView extends View {
         float cx = x + w / 2f, cy = top + h / 2f;
         RectF dest = new RectF(cx - drawW / 2f, cy - drawH / 2f, cx + drawW / 2f, cy + drawH / 2f);
         canvas.drawBitmap(wireframeBitmap, null, dest, mapPaint);
+        return dest;
     }
 
-    private void drawEquipColumn(Canvas canvas, float x, float top, float w, float h, EquipGroup[] groups) {
+    // Returns each group's own box rect, in the same order as the `groups`
+    // param - lets drawEquipmentTab wire them into drawWireframeCallouts.
+    private RectF[] drawEquipColumn(Canvas canvas, float x, float top, float w, float h, EquipGroup[] groups) {
         int collectedItems = GameState.getCollectedItems();
         int collectedBeams = GameState.getCollectedBeams();
 
@@ -938,24 +980,46 @@ public class MapStatusView extends View {
         float gap = h * 0.04f;
         float unitH = (h - gap * (groups.length - 1)) / totalEntries;
 
-        float y = top;
+        // One shared entry/title size for the WHOLE column (both groups),
+        // not computed per-group - groups have different row counts (SUIT:
+        // 2, MISC: 4), so sizing from each group's own boxH/rowCount made
+        // SUIT's text noticeably bigger than MISC's, which read as
+        // inconsistent/broken rather than a deliberate hierarchy. unitH (one
+        // row's height, the same for every group since it's shared column-
+        // wide) is the base size; reduced further below if the single
+        // longest label across every group in this column wouldn't fit the
+        // box width otherwise.
+        float titleSize = unitH * 0.34f;
+        float entrySize = unitH * 0.40f;
+        float maxLabelW = w * 0.80f;  // leaves room for the left-side bullet dot + margins
+        float entryPixelSize = PixelFont.pixelSizeForHeight(entrySize);
+        float widestLabelW = 0f;
         for (EquipGroup g : groups) {
+            for (String label : g.labels) {
+                widestLabelW = Math.max(widestLabelW, PixelFont.measureWidth(label, entryPixelSize));
+            }
+        }
+        if (widestLabelW > maxLabelW) {
+            float shrink = maxLabelW / widestLabelW;
+            entryPixelSize *= shrink;
+            entrySize *= shrink;
+        }
+
+        RectF[] boxes = new RectF[groups.length];
+        float y = top;
+        for (int gi = 0; gi < groups.length; gi++) {
+            EquipGroup g = groups[gi];
             int bits = g.isBeam ? collectedBeams : collectedItems;
             float boxH = unitH * g.bits.length;
             RectF box = new RectF(x, y, x + w, y + boxH);
-            float r = w * 0.03f;
-            canvas.drawRoundRect(box, r, r, slotBgPaint);
-            canvas.drawRoundRect(box, r, r, panelBorderPaint);
+            boxes[gi] = box;
+            drawPixelBox(canvas, box, COL_SLOT_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
 
-            float titleSize = boxH * (1f / g.bits.length) * 0.4f;
-            hudLabelPaint.setTextAlign(Paint.Align.LEFT);
-            hudLabelPaint.setColor(COL_ACCENT);
-            hudLabelPaint.setTextSize(titleSize);
-            canvas.drawText(g.title, box.left + w * 0.06f, box.top + titleSize * 1.2f, hudLabelPaint);
+            PixelFont.drawText(canvas, g.title, box.left + w * 0.06f, box.top + titleSize * 0.5f,
+                    PixelFont.pixelSizeForHeight(titleSize), COL_ACCENT, Paint.Align.LEFT);
 
             float rowH = (boxH - titleSize * 1.6f) / g.bits.length;
             float rowY = box.top + titleSize * 1.6f;
-            float entrySize = rowH * 0.42f;
             for (int i = 0; i < g.bits.length; i++) {
                 boolean collected = (bits & g.bits[i]) != 0;
                 float cy = rowY + i * rowH + rowH * 0.65f;
@@ -966,20 +1030,49 @@ public class MapStatusView extends View {
                 } else {
                     canvas.drawCircle(dotCx, dotCy, dotR, panelBorderPaint);
                 }
-                hudTextPaint.setTextAlign(Paint.Align.LEFT);
-                hudTextPaint.setColor(collected ? Color.WHITE : Color.rgb(90, 94, 110));
-                hudTextPaint.setTextSize(entrySize);
-                canvas.drawText(g.labels[i], box.left + w * 0.16f, cy, hudTextPaint);
+                int textColor = collected ? Color.WHITE : COL_DIM_GRAY;
+                PixelFont.drawText(canvas, g.labels[i], box.left + w * 0.16f, cy - entrySize * 0.7f,
+                        entryPixelSize, textColor, Paint.Align.LEFT);
             }
             y += boxH + gap;
         }
-        hudTextPaint.setColor(Color.WHITE);
+        return boxes;
     }
 
-    // slotSelectedBorderPaint is a STROKE-style paint (used for the ammo/
-    // equipment box highlight border); the collected-item bullet dot needs
-    // a filled circle in the same accent color, so this returns a small
-    // cached FILL variant instead of allocating a new Paint every frame.
+    // Leader/callout lines from fixed anchor points on the wireframe sprite
+    // (head/chest/hip/feet) to their corresponding equipment box, matching
+    // the zelda3-android reference's callout-line style on its own item
+    // screen. There's no per-item anchor data from the ROM to derive real
+    // hitboxes from, so these are reasonable fixed fractions of the
+    // wireframe's own drawn rect (dest) rather than anything data-driven.
+    private void drawWireframeCallouts(Canvas canvas, RectF dest, RectF suitBox, RectF miscBox,
+                                        RectF bootsBox, RectF beamBox) {
+        float cx = dest.centerX();
+        float beamY = dest.top + dest.height() * 0.08f;    // head/visor
+        float suitY = dest.top + dest.height() * 0.30f;    // chest
+        float miscY = dest.top + dest.height() * 0.55f;    // hip
+        float bootsY = dest.top + dest.height() * 0.92f;   // feet
+
+        // Left column (SUIT/MISC) is to the left of the wireframe - lines
+        // run from the sprite to that box's RIGHT edge. Right column
+        // (BOOTS/BEAM) lines run to that box's LEFT edge.
+        drawCalloutLine(canvas, cx, suitY, suitBox.right, suitBox.centerY());
+        drawCalloutLine(canvas, cx, miscY, miscBox.right, miscBox.centerY());
+        drawCalloutLine(canvas, cx, bootsY, bootsBox.left, bootsBox.centerY());
+        drawCalloutLine(canvas, cx, beamY, beamBox.left, beamBox.centerY());
+    }
+
+    private void drawCalloutLine(Canvas canvas, float sx, float sy, float ex, float ey) {
+        canvas.drawLine(sx, sy, ex, ey, calloutLinePaint);
+        float node = 3.5f;
+        pixelBoxPaint.setStyle(Paint.Style.FILL);
+        pixelBoxPaint.setColor(COL_ACCENT);
+        canvas.drawRect(sx - node, sy - node, sx + node, sy + node, pixelBoxPaint);
+    }
+
+    // The collected-item bullet dot in drawEquipColumn needs a small filled
+    // accent-colored circle - cached here instead of allocating a new Paint
+    // every frame.
     private Paint cachedFillAccentPaint;
     private Paint slotSelectedBorderPaintFilled() {
         if (cachedFillAccentPaint == null) {
@@ -1030,14 +1123,10 @@ public class MapStatusView extends View {
             ammoSlotRects[i].set(slot);
 
             boolean owned = maxCounts[i] > 0;
-            float r = slot.width() * 0.08f;
-            canvas.drawRoundRect(slot, r, r, slotBgPaint);
-            if (owned && selected == AMMO_SLOTS[i]) {
-                canvas.drawRoundRect(slot, r, r, slotSelectedBorderPaint);
-            }
-            if (!owned) {
-                canvas.drawRoundRect(slot, r, r, slotDimPaint);
-            }
+            boolean isSelected = owned && selected == AMMO_SLOTS[i];
+            int borderColor = isSelected ? COL_ACCENT : COL_BORDER_DARK;
+            int fillColor = owned ? COL_SLOT_BG : Color.rgb(22, 24, 34);
+            drawPixelBox(canvas, slot, fillColor, borderColor, COL_BORDER_HIGHLIGHT, false);
 
             if (haveIcon[i]) {
                 float iconH = slot.height() * 0.3f, iconW = iconH * iconAspect[i];
@@ -1048,20 +1137,14 @@ public class MapStatusView extends View {
                 if (!owned) mapPaint.setAlpha(255);
             }
 
-            hudLabelPaint.setTextAlign(Paint.Align.CENTER);
-            hudLabelPaint.setColor(owned ? Color.rgb(200, 204, 220) : Color.rgb(90, 94, 110));
-            hudLabelPaint.setTextSize(slot.width() * 0.12f);
-            canvas.drawText(AMMO_LABELS[i], slot.centerX(), slot.top + slot.height() * 0.62f, hudLabelPaint);
+            int labelColor = owned ? COL_TAB_LABEL : COL_DIM_GRAY;
+            PixelFont.drawText(canvas, AMMO_LABELS[i], slot.centerX(), slot.top + slot.height() * 0.58f,
+                    PixelFont.pixelSizeForHeight(slot.width() * 0.12f), labelColor, Paint.Align.CENTER);
 
-            hudTextPaint.setTextAlign(Paint.Align.CENTER);
-            hudTextPaint.setTextSize(slot.width() * 0.14f);
-            hudTextPaint.setColor(owned ? Color.WHITE : Color.rgb(90, 94, 110));
             String countText = counts[i] + "/" + maxCounts[i];
-            canvas.drawText(countText, slot.centerX(), slot.bottom - slot.height() * 0.12f, hudTextPaint);
-            hudTextPaint.setTextAlign(Paint.Align.LEFT);
-            hudTextPaint.setColor(Color.WHITE);
-            hudLabelPaint.setTextAlign(Paint.Align.LEFT);
-            hudLabelPaint.setColor(Color.rgb(150, 155, 175));
+            int countColor = owned ? Color.WHITE : COL_DIM_GRAY;
+            PixelFont.drawText(canvas, countText, slot.centerX(), slot.bottom - slot.height() * 0.12f - slot.width() * 0.14f,
+                    PixelFont.pixelSizeForHeight(slot.width() * 0.14f), countColor, Paint.Align.CENTER);
         }
     }
 
@@ -1331,9 +1414,8 @@ public class MapStatusView extends View {
     // Small +/- buttons in the bottom-right corner, an explicit alternative
     // to pinch-zoom for adjusting zoomFactor. Hit-tested in onTouchEvent.
     private void drawZoomButtons(Canvas canvas) {
-        float r = Math.min(zoomInBtn.width(), zoomInBtn.height()) * 0.3f;
-        canvas.drawRoundRect(zoomInBtn, r, r, zoomBtnBgPaint);
-        canvas.drawRoundRect(zoomOutBtn, r, r, zoomBtnBgPaint);
+        drawPixelBox(canvas, zoomInBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
+        drawPixelBox(canvas, zoomOutBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
 
         float half = Math.min(zoomInBtn.width(), zoomInBtn.height()) * 0.28f;
         float cx1 = zoomInBtn.centerX(), cy1 = zoomInBtn.centerY();
@@ -1350,11 +1432,9 @@ public class MapStatusView extends View {
     // color) when it's currently active, so the button's own look tells
     // you which mode you're in without needing a text label.
     private void drawRealTextureButton(Canvas canvas) {
-        float r = Math.min(realTextureBtn.width(), realTextureBtn.height()) * 0.3f;
-        canvas.drawRoundRect(realTextureBtn, r, r, realTextureMode ? tabActiveBgPaint : zoomBtnBgPaint);
-        if (realTextureMode) {
-            canvas.drawRoundRect(realTextureBtn, r, r, tabActiveBorderPaint);
-        }
+        int fill = realTextureMode ? COL_TAB_ACTIVE_BG : COL_PANEL_BG;
+        int border = realTextureMode ? COL_ACCENT : COL_BORDER_DARK;
+        drawPixelBox(canvas, realTextureBtn, fill, border, COL_BORDER_HIGHLIGHT, true);
         float pad = realTextureBtn.width() * 0.28f;
         RectF icon = new RectF(realTextureBtn.left + pad, realTextureBtn.top + pad,
                 realTextureBtn.right - pad, realTextureBtn.bottom - pad);
@@ -1366,8 +1446,7 @@ public class MapStatusView extends View {
     // only drawn) in real-texture mode, since the schematic view already
     // has its own Samus-centered baseline with no separate reset needed.
     private void drawResetCameraButton(Canvas canvas) {
-        float r = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.3f;
-        canvas.drawRoundRect(resetCameraBtn, r, r, zoomBtnBgPaint);
+        drawPixelBox(canvas, resetCameraBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
         float half = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.22f;
         float cx = resetCameraBtn.centerX(), cy = resetCameraBtn.centerY();
         canvas.drawLine(cx - half, cy, cx + half, cy, zoomBtnIconPaint);
@@ -1801,15 +1880,16 @@ public class MapStatusView extends View {
         canvas.drawRect(0, 0, w, h, dimPaint);
 
         float cx = w / 2f, cy = h / 2f;
-        logoTextPaint.setTextSize(w * 0.11f);
-        logoTextPaint.setAlpha(70);
+        float textHeight = w * 0.11f;
         logoLinePaint.setAlpha(70);
-        float textWidth = logoTextPaint.measureText(LOGO_TEXT);
+        int fadedAccent = Color.argb(70, Color.red(COL_ACCENT), Color.green(COL_ACCENT), Color.blue(COL_ACCENT));
+        float textWidth = PixelFont.measureWidth(LOGO_TEXT, PixelFont.pixelSizeForHeight(textHeight));
         float lineHalf = textWidth * 0.55f;
-        float lineY1 = cy - logoTextPaint.getTextSize() * 0.9f;
-        float lineY2 = cy + logoTextPaint.getTextSize() * 0.7f;
+        float lineY1 = cy - textHeight * 0.9f;
+        float lineY2 = cy + textHeight * 0.7f;
         canvas.drawLine(cx - lineHalf, lineY1, cx + lineHalf, lineY1, logoLinePaint);
         canvas.drawLine(cx - lineHalf, lineY2, cx + lineHalf, lineY2, logoLinePaint);
-        canvas.drawText(LOGO_TEXT, cx, cy + logoTextPaint.getTextSize() * 0.32f, logoTextPaint);
+        PixelFont.drawText(canvas, LOGO_TEXT, cx, cy - textHeight / 2f,
+                PixelFont.pixelSizeForHeight(textHeight), fadedAccent, Paint.Align.CENTER);
     }
 }

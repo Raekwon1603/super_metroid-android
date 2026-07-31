@@ -106,6 +106,13 @@ public class GameState {
     public static final int AMMO_XRAY = 5;
     public static native int getSelectedAmmo();
     public static native void setSelectedAmmo(int index);
+    // Cycles the selected ammo by +1/-1 among None/Missiles/Supers/
+    // PowerBombs, skipping any type with zero owned count - see
+    // MainActivity's own comment on why this exists as a separate entry
+    // point from setSelectedAmmo (physical L2/R2 button support on
+    // hardware whose controller reports them outside SDL's normal gamepad
+    // button range).
+    public static native void cycleSelectedAmmo(int direction);
 
     // Real room background art - the actual walls/floor/decoration tiles
     // the game draws during live gameplay, NOT the schematic pause-map

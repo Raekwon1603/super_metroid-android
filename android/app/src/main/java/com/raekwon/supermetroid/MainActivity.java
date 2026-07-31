@@ -4,6 +4,7 @@ import android.content.Context;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.view.Display;
+import android.view.KeyEvent;
 import android.view.View;
 
 import org.libsdl.app.SDLActivity;
@@ -80,6 +81,33 @@ public class MainActivity extends SDLActivity {
             secondScreen.dismiss();
             secondScreen = null;
         }
+    }
+
+    // Ammo-cycle shortcut (L2/R2) - handled here, at the raw Android key
+    // event level, rather than through SDL's usual SDL_GameController input
+    // path (main.c's HandleGamepadInput/RemapSdlButton). The Thor's own
+    // controller reports L2/R2 as plain digital AKEYCODE_BUTTON_L2/R2 key
+    // events (confirmed via `adb shell getevent -lp`: BTN_TL2/BTN_TR2 in
+    // its KEY set, no ABS_Z/ABS_RZ/ABS_GAS/ABS_BRAKE trigger axes at all),
+    // but SDL's Android joystick layer (SDL_sysjoystick.c) maps
+    // AKEYCODE_BUTTON_L2/R2 to raw joystick button indices 15/16 - outside
+    // the SDL_GameControllerButton enum's range, so they never surface as
+    // an SDL_CONTROLLERBUTTONDOWN/SDL_CONTROLLERAXISMOTION event at all
+    // (main.c's event loop only listens for those two, never raw
+    // SDL_JOYBUTTONDOWN). Intercepting the physical KeyEvent directly here
+    // and consuming ONLY these two codes - passing every other key through
+    // to SDL untouched - is the only way to actually observe them on this
+    // hardware.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode();
+        if (code == KeyEvent.KEYCODE_BUTTON_L2 || code == KeyEvent.KEYCODE_BUTTON_R2) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                GameState.cycleSelectedAmmo(code == KeyEvent.KEYCODE_BUTTON_R2 ? 1 : -1);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

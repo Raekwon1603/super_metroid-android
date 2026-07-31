@@ -206,6 +206,21 @@ JNIEXPORT void JNICALL JFN(setSelectedAmmo)(JNIEnv *env, jclass clazz, jint inde
   SM2_SetSelectedAmmo(index);
 }
 
+// Called from MainActivity.dispatchKeyEvent (main UI thread) when the
+// physical L2/R2 buttons are pressed - see MainActivity's own comment for
+// why this bypasses SDL's GameController layer entirely (this device
+// reports L2/R2 as digital AKEYCODE_BUTTON_L2/R2 key events outside SDL's
+// SDL_GameControllerButton enum range, which main.c's own gamepad-axis
+// path never sees). A plain hud_item_index read-then-write from a
+// different thread than the game loop is the same simplification
+// SM2_SetSelectedAmmo already makes safely (see its own comment) - no
+// SM2_LockGameState needed, that mutex only guards DecompressToMem's
+// shared cursor, not this field.
+JNIEXPORT void JNICALL JFN(cycleSelectedAmmo)(JNIEnv *env, jclass clazz, jint direction) {
+  (void)env; (void)clazz;
+  SM2_CycleSelectedAmmo(direction);
+}
+
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 64 * 8) return JNI_FALSE;

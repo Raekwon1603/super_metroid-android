@@ -203,6 +203,11 @@ int SM2_GetSelectedAmmo(void);
 // Writes hud_item_index directly - the same effect as pressing Select on
 // the controller until this slot is reached. No-op for out-of-range values.
 void SM2_SetSelectedAmmo(int index);
+// Cycles the selected ammo by +1/-1 among None/Missiles/Supers/PowerBombs,
+// skipping any type with zero owned count. For binding to a spare gamepad
+// button (e.g. L2/R2) so ammo can be switched without opening the second
+// screen's AMMO tab.
+void SM2_CycleSelectedAmmo(int direction);
 
 // ---- real room background art ----
 // Max room-art render buffer dimensions - a handful of SM's largest rooms

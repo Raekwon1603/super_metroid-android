@@ -738,6 +738,8 @@ static void HandleCommand(uint32 j, bool pressed) {
       break;
     case kKeys_VolumeUp:
     case kKeys_VolumeDown: HandleVolumeAdjustment(j == kKeys_VolumeUp ? 1 : -1); break;
+    case kKeys_CycleAmmoNext: SM2_CycleSelectedAmmo(1); break;
+    case kKeys_CycleAmmoPrev: SM2_CycleSelectedAmmo(-1); break;
     default: assert(0);
     }
   }

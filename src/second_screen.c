@@ -530,6 +530,37 @@ void SM2_SetSelectedAmmo(int index) {
   hud_item_index = index;
 }
 
+// Cycles hud_item_index by +1/-1 (direction), skipping any ammo type not
+// currently owned - same ownership rule HandleSwitchingHudSelection's own
+// kRunSwitchedToHudHandler table enforces (sm_90.c), just reimplemented as
+// a direct field check here instead of calling that real handler: it's
+// gated on joypad1_newkeys matching the real Select button bitmask
+// mid-frame, so driving it from an async gamepad-button callback (this is
+// called from main.c's L2/R2 trigger handling, outside SM's own per-frame
+// input read) risked acting a frame out of sync with the game's own input
+// state. A direct hud_item_index write is the same simplification
+// SM2_SetSelectedAmmo already makes safely. Only cycles between
+// None/Missiles/Supers/PowerBombs (0-3) - Grapple/X-Ray (4-5) have no real
+// ammo count to arm/disarm and aren't reachable from the second-screen
+// ammo tab either, so skipping them here keeps this consistent with that
+// same UI.
+void SM2_CycleSelectedAmmo(int direction) {
+  if (direction != 1 && direction != -1) return;
+  int start = hud_item_index;
+  int index = start;
+  for (int tries = 0; tries < 4; tries++) {
+    index = (index + direction + 4) % 4;
+    bool owned = index == kSM2Ammo_None
+        || (index == kSM2Ammo_Missiles && samus_missiles > 0)
+        || (index == kSM2Ammo_SuperMissiles && samus_super_missiles > 0)
+        || (index == kSM2Ammo_PowerBombs && samus_power_bombs > 0);
+    if (owned) {
+      hud_item_index = index;
+      return;
+    }
+  }
+}
+
 // ---- Real room background art (not the schematic pause-map tiles above) ----
 //
 // Renders the CURRENT room's actual BG1 tilemap, exactly as the real game
