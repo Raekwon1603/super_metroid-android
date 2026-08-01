@@ -10,6 +10,23 @@ This follows the same idea as [samyost1/zelda3-android](https://github.com/samyo
 dual-screen mod for `snesrev/zelda3`, adapted for Super Metroid's own map and
 item system.
 
+| Main screen | Second screen: world map |
+|---|---|
+| ![Main gameplay screen](docs/screenshots/main-gameplay.png) | ![Second screen world map](docs/screenshots/second-screen-map.png) |
+
+| Second screen: single room, schematic | Second screen: single room, real texture |
+|---|---|
+| ![Second screen schematic room view](docs/screenshots/second-screen-map-room.png) | ![Second screen real-texture room view](docs/screenshots/second-screen-texture-map.png) |
+
+The real-texture room view (right, above) is still in development. It is
+usable now, you can clearly tell where you are and where everything is,
+but it currently has graphical glitches (visible in the screenshot on the
+right edge of the room). It will get cleaned up over time.
+
+| Second screen: items | Second screen: ammo |
+|---|---|
+| ![Second screen items tab](docs/screenshots/second-screen-items.png) | ![Second screen ammo tab](docs/screenshots/second-screen-ammo.png) |
+
 The underlying decompile is still an early-stage project. See the
 [original repo](https://github.com/snesrev/sm) and its
 [Discord](https://discord.gg/AJJbJAzNNJ) for the state of that effort. This
@@ -84,7 +101,8 @@ bottom:
 - Real-texture mode: the actual room background art (walls, floor,
   decoration) instead of schematic rectangles, for the room you're
   currently standing in. Also explored-only, and clipped to the room's real
-  pixel bounds.
+  pixel bounds. Still in development: usable and clear, but it currently
+  has some graphical glitches (see the screenshot above).
 
   The world map's area layout (where Crateria sits relative to Brinstar,
   Norfair, and so on) is not eyeballed. It's derived from every real
