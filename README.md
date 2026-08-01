@@ -122,7 +122,7 @@ bottom:
 **Items** tab. Your currently equipped suit, boots, beams, and misc items,
 shown as a list next to a full-color Samus sprite with callout lines to
 each equipped item. The suit art (tile graphics, palette, and layout) was
-extracted from a build of the Super Metroid Redux ROM hack and is used here
+extracted from a build of the [Super Metroid Redux ROM hack](https://github.com/ShadowOne333/Super-Metroid-Redux) and is used here
 for the same equipment-screen purpose it was originally drawn for, recolored
 live to match whichever suit you actually have equipped (Power, Varia, or
 Gravity). Credit to that hack's artists for the original graphics; if you
