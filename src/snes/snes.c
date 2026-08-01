@@ -183,7 +183,10 @@ uint8_t snes_readBBus(Snes* snes, uint8_t adr) {
     return ppu_read(snes->ppu, adr);
   }
   if(adr < 0x80) {
-    assert(0);
+    // Real APU port reads only happen when the ROM's own APU code actually
+    // runs (RM_THEIRS) instead of being patched out in favor of the
+    // decompiled C's out-of-band RtlApuUpload (RM_MINE/RM_BOTH) - hitting
+    // this is expected there, not a sign of an unimplemented path.
     snes->apuCatchupCycles = 32;
     snes_catchupApu(snes); // catch up the apu before reading
     return snes->apu->outPorts[adr & 0x3];

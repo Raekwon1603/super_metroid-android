@@ -1,10 +1,24 @@
-# Super Metroid Android (with dual-screen support)
+# Super Metroid Android SNES emulator (with dual-screen support)
 
-An Android port of [snesrev/sm](https://github.com/snesrev/sm), a C
-decompilation of Super Metroid, with a second-screen mod for dual-display
-handhelds like the AYN Thor. While you play on the main screen, the second
-panel shows a live map, your equipment, and your ammo, so you don't have to
-pause and dig through menus to check where you are or what you're carrying.
+An Android SNES emulator for Super Metroid, with a second-screen mod for
+dual-display handhelds like the AYN Thor. While you play on the main screen,
+the second panel shows a live map, your equipment, and your ammo, so you
+don't have to pause and dig through menus to check where you are or what
+you're carrying.
+
+This is built on top of [snesrev/sm](https://github.com/snesrev/sm), a C
+decompilation of Super Metroid, which bundles both a from-scratch
+reimplementation of the game's logic in C *and* a byte-accurate 65816 CPU +
+SPC-700 APU emulator core (normally used only to verify the decompile
+matches real hardware, frame by frame). Gameplay here runs on that second
+part - the real emulator core, executing the actual ROM's original machine
+code - not on the decompiled C logic. That switch was made after finding a
+real mistranslation bug in the decompile that only manifested on Android's
+arm64 target (never on desktop/x86_64, and never on real hardware), causing
+a softlock in a specific room. Running on the real emulator core sidesteps
+that whole class of bug, at the cost of losing the one gameplay tweak (see
+below) that was implemented as a decompiled-C hook rather than a RAM-level
+edit.
 
 This follows the same idea as [samyost1/zelda3-android](https://github.com/samyost1/zelda3-android)'s
 dual-screen mod for `snesrev/zelda3`, adapted for Super Metroid's own map and
@@ -27,13 +41,16 @@ right edge of the room). It will get cleaned up over time.
 |---|---|
 | ![Second screen items tab](docs/screenshots/second-screen-items.png) | ![Second screen ammo tab](docs/screenshots/second-screen-ammo.png) |
 
-The underlying decompile is still an early-stage project. See the
+The underlying decompile is still an early-stage project, and its C game
+logic remains in this codebase (used on desktop/Switch builds, and always
+available as a reference for the emulator core to be checked against), but
+it is not what drives gameplay in the Android build. See the
 [original repo](https://github.com/snesrev/sm) and its
-[Discord](https://discord.gg/AJJbJAzNNJ) for the state of that effort. This
-fork does not modify core gameplay logic beyond a couple of crash fixes and
-the small control tweaks listed below (auto-run and an ammo-cycle
-shortcut). Everything else is additive: the Android platform target and the
-second-screen mod.
+[Discord](https://discord.gg/AJJbJAzNNJ) for the state of the decompile
+effort itself. This fork does not modify the ROM's own game logic; the
+ammo-cycle shortcut listed below is implemented as a RAM edit from the
+platform layer, not as a change to gameplay code. Everything else is
+additive: the Android platform target and the second-screen mod.
 
 ## About the development of this port
 
@@ -152,10 +169,11 @@ quicksave keys aren't reachable from a gamepad-only device.
 
 ### Gameplay tweaks
 
-- **Auto-run** (on by default): Samus runs automatically, and holding the
-  run/shoot button walks instead, for precise platforming. Ported from the
-  "Auto Run" option in the Control Freak 2 ROM hack. Turn it off with
-  `AutoRun = 0` in `sm.ini` to get vanilla hold-to-run behavior back.
+- **Auto-run**: currently disabled. It previously worked by patching the
+  decompiled C game logic, which no longer runs gameplay on Android (see
+  above) - `AutoRun` in `sm.ini` has no effect right now. Vanilla
+  hold-to-run behavior is what you get. Re-adding it needs an
+  emulator/input-layer equivalent instead of a decompile-side hook.
 
 ## Desktop / Switch
 

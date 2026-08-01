@@ -14,7 +14,14 @@
 void RtlRunFrameCompare(uint16 input, int run_what);
 
 enum RunMode { RM_BOTH, RM_MINE, RM_THEIRS };
-#ifdef __ANDROID__
+#ifdef FORCE_RM_THEIRS_DEBUG
+// Temporary: drive gameplay from the byte-accurate CPU-emulated interpreter
+// instead of the decompiled C logic, to test whether a bug reproducible
+// only on real Android/arm64 hardware (never on desktop, never in this same
+// decompile compiled for x86_64) lives in the decompile itself rather than
+// in the original game's real behavior. Not meant to ship long-term.
+uint8 g_runmode = RM_THEIRS;
+#elif defined(__ANDROID__)
 // RM_BOTH runs the frame through both the original CPU-emulated interpreter
 // and the decompiled C logic and compares them, falling back to the
 // emulated version for a frame on mismatch before resuming dual-mode - a
@@ -882,8 +889,14 @@ Snes *SnesInit(const char *filename) {
   // Remove ReadJoypadInputs from Vector_NMI
   { uint8 t[] = { 0x18, 0x18, 0x18, 0x18 }; PatchBytes(0x8095E1, t, sizeof(t)); } // callf   ReadJoypadInputs
 
-  // Remove APU_UploadBank
-  if (g_use_my_apu_code)
+  // Remove APU_UploadBank - only when something other than the real ROM
+  // routine is responsible for uploading the sound driver (RM_MINE/RM_BOTH,
+  // where the decompiled C's RtlApuUpload does it out-of-band). Under
+  // RM_THEIRS the real ROM routine is the only thing that ever uploads it,
+  // so it must stay intact - g_use_my_apu_code isn't authoritative here
+  // since it defaults true at declaration and this patch runs once at boot,
+  // before any per-frame run-mode logic has set it for real.
+  if (g_runmode != RM_THEIRS)
     { uint8 t[] = { 0x60 }; PatchBytes(0x808028, t, sizeof(t)); }
 
   // Remove reads from IO_APUI01 etc
@@ -1044,6 +1057,7 @@ void RtlRunFrameCompare(uint16 input, int run_what) {
   g_snes->input1->currentState = input;
 
   if (g_runmode == RM_THEIRS) {
+    g_use_my_apu_code = false;
     RunOneFrameOfGame_Emulated();
     DrawFrameToPpu();
 
