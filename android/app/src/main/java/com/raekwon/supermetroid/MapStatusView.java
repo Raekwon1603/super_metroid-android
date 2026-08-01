@@ -206,7 +206,7 @@ public class MapStatusView extends View {
             Color.rgb(110, 210, 110), // Brinstar - green
             Color.rgb(235, 110, 90),  // Norfair - red-orange
             Color.rgb(210, 180, 110), // Wrecked Ship - tan/yellow
-            Color.rgb(90, 190, 225),  // Maridia - cyan-blue
+            Color.rgb(255, 100, 100),  // Maridia - red
             Color.rgb(220, 110, 190), // Tourian - magenta/pink
     };
 
@@ -259,20 +259,25 @@ public class MapStatusView extends View {
     // own room-level detail view (drawMap), pinch back out returns here.
     private boolean worldView = true;
 
-    private static final int COL_BG = Color.rgb(13, 15, 23);
+    // Lightened from a near-black (13,15,23) starting point - the original
+    // read as a "void" behind the panel and through unexplored map tiles;
+    // this whole scale (BG/PANEL_BG/SLOT_BG) was raised together, keeping
+    // the same relative step between them, rather than just brightening one
+    // tone in isolation and losing the layered depth.
+    private static final int COL_BG = Color.rgb(30, 33, 44);
     private static final int COL_ACCENT = Color.rgb(255, 158, 68);
     // Named palette for the SNES-menu-style bordered boxes (drawPixelBox)
     // and pixel-font text - consolidates what used to be inline
     // Color.rgb(...) literals scattered across the draw methods, plus one
     // new tone (COL_BORDER_HIGHLIGHT) for the box bevel effect.
-    private static final int COL_PANEL_BG = Color.rgb(20, 22, 32);
-    private static final int COL_BORDER_DARK = Color.rgb(45, 50, 70);
-    private static final int COL_BORDER_HIGHLIGHT = Color.rgb(100, 108, 140);
-    private static final int COL_LABEL_GRAY = Color.rgb(150, 155, 175);
-    private static final int COL_TAB_ACTIVE_BG = Color.rgb(40, 44, 62);
-    private static final int COL_TAB_LABEL = Color.rgb(200, 204, 220);
-    private static final int COL_SLOT_BG = Color.rgb(30, 33, 46);
-    private static final int COL_DIM_GRAY = Color.rgb(90, 94, 110);
+    private static final int COL_PANEL_BG = Color.rgb(38, 42, 56);
+    private static final int COL_BORDER_DARK = Color.rgb(58, 64, 86);
+    private static final int COL_BORDER_HIGHLIGHT = Color.rgb(115, 124, 155);
+    private static final int COL_LABEL_GRAY = Color.rgb(160, 165, 185);
+    private static final int COL_TAB_ACTIVE_BG = Color.rgb(56, 61, 82);
+    private static final int COL_TAB_LABEL = Color.rgb(205, 209, 225);
+    private static final int COL_SLOT_BG = Color.rgb(48, 52, 68);
+    private static final int COL_DIM_GRAY = Color.rgb(105, 110, 128);
     private static final int COL_SAMUS_DOT = Color.rgb(255, 70, 70);
 
     private static final String LOGO_TEXT = "METROID";
@@ -284,6 +289,10 @@ public class MapStatusView extends View {
     // edge or duplicating the main screen's own HUD.
     private static final float HUD_BAR_HEIGHT_FRAC = 0.115f;
     private static final float PANEL_MARGIN_FRAC = 0.018f;
+    // Thin strip for the map-only controls (zoom, real-texture toggle,
+    // reset-camera) between the map panel and the tab bar - see
+    // mapControlsBarRect's own comment.
+    private static final float MAP_CONTROLS_BAR_HEIGHT_FRAC = 0.09f;
 
     // The 3 footer tabs: MAP (the existing live minimap), EQUIPMENT (a
     // pause-menu-style grid of every collected item/beam, real ROM icons
@@ -303,7 +312,6 @@ public class MapStatusView extends View {
     private final Paint mapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint samusRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint samusDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint labelBitmapPaint = new Paint();
     private final Paint dimPaint = new Paint();
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -330,7 +338,18 @@ public class MapStatusView extends View {
     private Bitmap wireframeBitmap;
     private int wireframeCachedEquippedItems = Integer.MIN_VALUE;
     private final RectF panelRect = new RectF();
+    // panelRect shrunk by drawPixelBox's own border-inset amount - see
+    // onDraw's own comment on why map content is clipped/drawn to THIS,
+    // not the raw panelRect, to actually stay inside the visible border
+    // line instead of just inside panelRect's true (wider) bounds.
+    private final RectF panelInnerRect = new RectF();
     private final RectF hudBarRect = new RectF();
+    // Map-only controls strip (zoom +/-, real-texture toggle, reset-camera)
+    // between panelRect and hudBarRect - only drawn while MAP is the
+    // active tab (see onDraw), so these buttons read as dedicated chrome
+    // for the map instead of floating over the map's own content like they
+    // used to.
+    private final RectF mapControlsBarRect = new RectF();
 
     // ---- Real room art (realTextureMode, toggled via realTextureBtn) ----
     // In real-texture mode, the room view swaps from the schematic pause-
@@ -478,6 +497,19 @@ public class MapStatusView extends View {
     private final boolean[] worldConnectorDrawn = new boolean[WORLD_CONNECTORS.length];
     private int worldAreaCursor = 0;
     private int worldFrameCounter = 0;
+    // Real centroid (in canvas TILE units, not px) of each area's own
+    // ACTUALLY-OWNED pixels in worldPixelOwner - used to place that area's
+    // label, instead of WORLD_AREA_LAYOUT's raw declared-box corner
+    // (l[4]/l[5]). Areas' declared boxes are deliberately oversized/
+    // overlapping (see WORLD_AREA_LAYOUT's own comment - Tourian's box
+    // alone overlaps Brinstar's by 11x10 tiles), so a label anchored to a
+    // box CORNER can land nowhere near that area's actual visible room
+    // art - confirmed on-device (Tourian's label rendered stacked directly
+    // under Brinstar's, both sitting in Brinstar's own territory). The
+    // centroid of pixels the area actually WON in the ownership tiebreak
+    // is guaranteed to sit somewhere within that area's own real art.
+    private final float[] worldLabelCenterX = new float[6];
+    private final float[] worldLabelCenterY = new float[6];
 
     private boolean nativeBroken = false;
 
@@ -570,9 +602,6 @@ public class MapStatusView extends View {
         samusRingPaint.setStrokeWidth(2.5f);
         samusDotPaint.setColor(COL_SAMUS_DOT);
 
-        labelBitmapPaint.setFilterBitmap(false);  // crisp pixel-art scaling, no blur
-        labelBitmapPaint.setAlpha(150);  // translucent - identifies the area without covering the room layout under it
-
         dimPaint.setColor(Color.BLACK);
 
         logoLinePaint.setColor(COL_ACCENT);
@@ -617,9 +646,22 @@ public class MapStatusView extends View {
 
         float hudBarH = h * HUD_BAR_HEIGHT_FRAC;
         float panelMargin = Math.min(w, h) * PANEL_MARGIN_FRAC;
-        float mapBottom = h - hudBarH;
+        // Map controls (zoom +/-, real-texture toggle, reset-camera) get
+        // their own thin strip between the map panel and the tab bar,
+        // instead of floating as small squares in the map panel's own
+        // corners on top of the room/area art - they used to visually
+        // compete with the map content itself for space and attention;
+        // pulling them into their own row makes them read as chrome
+        // (like the tab bar) rather than an overlay on the map. Only
+        // meaningful height while MAP is the active tab (see onDraw), but
+        // reserved unconditionally here so switching tabs doesn't reflow
+        // the whole layout.
+        float controlsBarH = h * MAP_CONTROLS_BAR_HEIGHT_FRAC;
+        float mapBottom = h - hudBarH - controlsBarH;
         panelRect.set(panelMargin, panelMargin, w - panelMargin, mapBottom - panelMargin * 0.5f);
-        hudBarRect.set(panelMargin, mapBottom + panelMargin * 0.5f, w - panelMargin, h - panelMargin);
+        mapControlsBarRect.set(panelMargin, mapBottom + panelMargin * 0.5f,
+                w - panelMargin, mapBottom + controlsBarH - panelMargin * 0.2f);
+        hudBarRect.set(panelMargin, h - hudBarH + panelMargin * 0.3f, w - panelMargin, h - panelMargin);
 
         // 3 equal-width tab buttons filling the footer strip, small gaps
         // between them - same layout idea as tmc-android's PaintTabBar.
@@ -630,15 +672,22 @@ public class MapStatusView extends View {
             tabButtonRects[i].set(tx0, hudBarRect.top, tx0 + tabW, hudBarRect.bottom);
         }
 
-        float size = Math.min(w, h) * 0.11f;
-        float margin = Math.min(w, h) * 0.03f;
-        float right = panelRect.right - margin, bottom = panelRect.bottom - margin;
-        zoomOutBtn.set(right - size, bottom - size, right, bottom);
-        zoomInBtn.set(right - size, bottom - size * 2 - margin * 0.6f, right, bottom - size - margin * 0.6f);
-
-        float left2 = panelRect.left + margin;
-        realTextureBtn.set(left2, bottom - size, left2 + size, bottom);
-        resetCameraBtn.set(left2, bottom - size * 2 - margin * 0.6f, left2 + size, bottom - size - margin * 0.6f);
+        // 4 equal-width buttons in the controls strip: reset-camera,
+        // real-texture toggle, zoom out, zoom in (left-to-right) - reset/
+        // toggle stay on the left since they're mode switches, zoom stays
+        // on the right as a +/- pair, mirroring where they used to sit
+        // (left/right corners) so the muscle-memory position doesn't
+        // change even though they're no longer floating over the map.
+        float btnGap = mapControlsBarRect.width() * 0.02f;
+        float btnW = (mapControlsBarRect.width() - btnGap * 3) / 4f;
+        float bx = mapControlsBarRect.left;
+        resetCameraBtn.set(bx, mapControlsBarRect.top, bx + btnW, mapControlsBarRect.bottom);
+        bx += btnW + btnGap;
+        realTextureBtn.set(bx, mapControlsBarRect.top, bx + btnW, mapControlsBarRect.bottom);
+        bx += btnW + btnGap;
+        zoomOutBtn.set(bx, mapControlsBarRect.top, bx + btnW, mapControlsBarRect.bottom);
+        bx += btnW + btnGap;
+        zoomInBtn.set(bx, mapControlsBarRect.top, bx + btnW, mapControlsBarRect.bottom);
     }
 
     @Override
@@ -693,8 +742,24 @@ public class MapStatusView extends View {
             return true;
         } else if (action == MotionEvent.ACTION_UP && resetCameraBtnPointerId != -1) {
             if (resetCameraBtn.contains(event.getX(), event.getY())) {
-                roomArtPanX = 0f;
-                roomArtPanY = 0f;
+                // Resets whichever pan offset is actually active for the
+                // CURRENT map mode - this button used to only exist (and
+                // only reset roomArtPanX/Y) in real-texture mode, since the
+                // schematic view's pan was only resettable via double-tap.
+                // Now that it's available in every mode, it needs to reset
+                // the right one of the 3 independent pan offsets
+                // (roomArtPanX/Y, panOffsetX/Y, worldPanOffsetX/Y) rather
+                // than always roomArtPanX/Y regardless of mode.
+                if (realTextureMode) {
+                    roomArtPanX = 0f;
+                    roomArtPanY = 0f;
+                } else if (worldView) {
+                    worldPanOffsetX = 0f;
+                    worldPanOffsetY = 0f;
+                } else {
+                    panOffsetX = 0f;
+                    panOffsetY = 0f;
+                }
             }
             resetCameraBtnPointerId = -1;
             return true;
@@ -806,6 +871,28 @@ public class MapStatusView extends View {
                         // as a misleadingly "100% explored" map on a brand
                         // new file, before the player has even started.
                         if (GameState.isPlayingLive()) {
+                            // Map content is both clipped to AND drawn
+                            // within the border's own INNER edge
+                            // (panelInnerRect), not the raw panelRect.
+                            // drawPixelBox draws its border stroke inset
+                            // from panelRect's true edges (see its own
+                            // "inset" math) - clipping to panelRect itself
+                            // (an earlier version of this did) left a gap
+                            // between that clip boundary and the visibly
+                            // narrower border line, which map content
+                            // filled right up to, LOOKING like it cut
+                            // through the border even though technically
+                            // nothing was outside panelRect (confirmed
+                            // on-device: room art visibly extended past
+                            // the border line on the right/bottom edges).
+                            // save/restore instead of a persistent field
+                            // clip so every OTHER tab/overlay drawn later
+                            // this frame is unaffected.
+                            float borderInset = Math.min(panelRect.width(), panelRect.height()) * 0.02f + 1.5f;
+                            panelInnerRect.set(panelRect.left + borderInset, panelRect.top + borderInset,
+                                    panelRect.right - borderInset, panelRect.bottom - borderInset);
+                            int clipSave = canvas.save();
+                            canvas.clipRect(panelInnerRect);
                             if (realTextureMode) {
                                 // No real-texture WORLD composite yet (a
                                 // bigger follow-up - stitching every explored
@@ -813,12 +900,13 @@ public class MapStatusView extends View {
                                 // real-texture mode always shows the current
                                 // single room for now, regardless of
                                 // worldView's own zoomed-in/out state.
-                                drawRoomArt(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                                drawRoomArt(canvas, panelInnerRect.left, panelInnerRect.top, panelInnerRect.right, panelInnerRect.bottom);
                             } else if (worldView) {
-                                drawWorldView(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                                drawWorldView(canvas, panelInnerRect.left, panelInnerRect.top, panelInnerRect.right, panelInnerRect.bottom);
                             } else {
-                                drawMap(canvas, panelRect.left, panelRect.top, panelRect.right, panelRect.bottom);
+                                drawMap(canvas, panelInnerRect.left, panelInnerRect.top, panelInnerRect.right, panelInnerRect.bottom);
                             }
+                            canvas.restoreToCount(clipSave);
                         }
                         break;
                     case EQUIPMENT:
@@ -829,16 +917,18 @@ public class MapStatusView extends View {
                         break;
                 }
                 // Re-stroke the border on top of whatever tab content just
-                // drew, same as the original draw order - keeps the panel's
-                // own frame from ever being covered by map/room-art bitmaps
-                // that fill right up to panelRect's edges.
+                // drew, so it's always crisp/on-top regardless of tab -
+                // the MAP tab's own content is now additionally clipped to
+                // panelRect before drawing (see above), so this is mainly
+                // for EQUIPMENT/AMMO here, but doesn't hurt to keep for MAP
+                // too as a second guarantee.
                 float panelR = Math.min(panelRect.width(), panelRect.height()) * 0.02f + 1.5f;
                 canvas.drawRect(panelRect.left + panelR / 2f, panelRect.top + panelR / 2f,
                         panelRect.right - panelR / 2f, panelRect.bottom - panelR / 2f, panelBorderPaint);
                 if (currentTab == Tab.MAP) {
                     drawZoomButtons(canvas);
                     drawRealTextureButton(canvas);
-                    if (realTextureMode) drawResetCameraButton(canvas);
+                    drawResetCameraButton(canvas);
                 }
                 if (!GameState.isPlayingLive()) {
                     drawDimOverlay(canvas, w, h);
@@ -1416,8 +1506,9 @@ public class MapStatusView extends View {
         return new int[] {minX, minY, maxX, maxY};
     }
 
-    // Small +/- buttons in the bottom-right corner, an explicit alternative
-    // to pinch-zoom for adjusting zoomFactor. Hit-tested in onTouchEvent.
+    // Small +/- buttons in the map controls strip (mapControlsBarRect), an
+    // explicit alternative to pinch-zoom for adjusting zoomFactor. Hit-
+    // tested in onTouchEvent.
     private void drawZoomButtons(Canvas canvas) {
         drawPixelBox(canvas, zoomInBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
         drawPixelBox(canvas, zoomOutBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
@@ -1431,32 +1522,81 @@ public class MapStatusView extends View {
         canvas.drawLine(cx2 - half, cy2, cx2 + half, cy2, zoomBtnIconPaint);
     }
 
-    // Schematic-vs-real-texture mode toggle button - a small square icon
-    // suggesting "photo/image" (a picture-frame rectangle) when real-
-    // texture mode is available to switch INTO, filled solid (accent
-    // color) when it's currently active, so the button's own look tells
-    // you which mode you're in without needing a text label.
+    // Schematic-vs-real-texture mode toggle button - a small landscape-
+    // photo pictogram (frame outline + a mountain triangle + a sun dot),
+    // the standard "image" icon shape, rather than a single ambiguous
+    // filled square that could mean almost anything (the earlier version
+    // read as unclear even after being visually fixed to render at the
+    // right size - see this method's own git history). Filled/accent-
+    // bordered when real-texture mode is currently active, so the button's
+    // own look tells you which mode you're in without needing a text
+    // label.
     private void drawRealTextureButton(Canvas canvas) {
         int fill = realTextureMode ? COL_TAB_ACTIVE_BG : COL_PANEL_BG;
         int border = realTextureMode ? COL_ACCENT : COL_BORDER_DARK;
         drawPixelBox(canvas, realTextureBtn, fill, border, COL_BORDER_HIGHLIGHT, true);
-        float pad = realTextureBtn.width() * 0.28f;
-        RectF icon = new RectF(realTextureBtn.left + pad, realTextureBtn.top + pad,
-                realTextureBtn.right - pad, realTextureBtn.bottom - pad);
-        canvas.drawRect(icon, zoomBtnIconPaint);
+
+        float pad = Math.min(realTextureBtn.width(), realTextureBtn.height()) * 0.26f;
+        float left = realTextureBtn.centerX() - pad, right = realTextureBtn.centerX() + pad;
+        float top = realTextureBtn.centerY() - pad, bottom = realTextureBtn.centerY() + pad;
+
+        // Frame outline (unfilled rect, not a solid block).
+        pixelBoxPaint.setStyle(Paint.Style.STROKE);
+        pixelBoxPaint.setStrokeWidth(Math.max(2f, pad * 0.18f));
+        pixelBoxPaint.setColor(Color.WHITE);
+        canvas.drawRect(left, top, right, bottom, pixelBoxPaint);
+
+        // Sun: small filled circle, upper-right corner of the frame.
+        pixelBoxPaint.setStyle(Paint.Style.FILL);
+        float sunR = pad * 0.16f;
+        canvas.drawCircle(right - pad * 0.4f, top + pad * 0.4f, sunR, pixelBoxPaint);
+
+        // Mountain: a filled triangle rising from the frame's bottom edge,
+        // clipped to the frame so its peak doesn't poke out past the top -
+        // the classic "landscape photo" silhouette.
+        int clipSave = canvas.save();
+        canvas.clipRect(left, top, right, bottom);
+        android.graphics.Path mountain = new android.graphics.Path();
+        mountain.moveTo(left + pad * 0.15f, bottom);
+        mountain.lineTo(left + pad * 1.05f, top + pad * 0.35f);
+        mountain.lineTo(right - pad * 0.1f, bottom);
+        mountain.close();
+        canvas.drawPath(mountain, pixelBoxPaint);
+        canvas.restoreToCount(clipSave);
     }
 
-    // Recenter/reset-camera button - a crosshair-in-a-box icon, snaps
-    // roomArtPanX/Y back to 0 (Samus-centered) on tap. Only relevant (and
-    // only drawn) in real-texture mode, since the schematic view already
-    // has its own Samus-centered baseline with no separate reset needed.
+    // Recenter/reset-camera button - a 4-corner focus-bracket icon around a
+    // center dot (the standard "recenter/refocus view" pictogram, same
+    // shape a camera app uses for its focus reticle), snaps whichever pan
+    // offset is active for the current map mode back to 0/Samus-centered
+    // on tap (see the resetCameraBtn ACTION_UP handler in onTouchEvent for
+    // which one). Previously a crosshair-in-a-circle, which read as
+    // ambiguous (could as easily suggest "target/aim" as "recenter") and
+    // was also only ever drawn in real-texture mode - now available and
+    // drawn in every map mode, so it needed a clearer, mode-agnostic icon
+    // rather than one implying a single specific meaning.
     private void drawResetCameraButton(Canvas canvas) {
         drawPixelBox(canvas, resetCameraBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
-        float half = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.22f;
+        float half = Math.min(resetCameraBtn.width(), resetCameraBtn.height()) * 0.26f;
+        float armLen = half * 0.55f;
         float cx = resetCameraBtn.centerX(), cy = resetCameraBtn.centerY();
-        canvas.drawLine(cx - half, cy, cx + half, cy, zoomBtnIconPaint);
-        canvas.drawLine(cx, cy - half, cx, cy + half, zoomBtnIconPaint);
-        canvas.drawCircle(cx, cy, half * 1.5f, zoomBtnIconPaint);
+        pixelBoxPaint.setStyle(Paint.Style.STROKE);
+        pixelBoxPaint.setStrokeWidth(Math.max(2f, half * 0.16f));
+        pixelBoxPaint.setColor(Color.WHITE);
+        pixelBoxPaint.setStrokeCap(Paint.Cap.ROUND);
+        float l = cx - half, r = cx + half, t = cy - half, b = cy + half;
+        // 4 independent L-shaped brackets, one per corner.
+        canvas.drawLine(l, t, l + armLen, t, pixelBoxPaint);
+        canvas.drawLine(l, t, l, t + armLen, pixelBoxPaint);
+        canvas.drawLine(r, t, r - armLen, t, pixelBoxPaint);
+        canvas.drawLine(r, t, r, t + armLen, pixelBoxPaint);
+        canvas.drawLine(l, b, l + armLen, b, pixelBoxPaint);
+        canvas.drawLine(l, b, l, b - armLen, pixelBoxPaint);
+        canvas.drawLine(r, b, r - armLen, b, pixelBoxPaint);
+        canvas.drawLine(r, b, r, b - armLen, pixelBoxPaint);
+        pixelBoxPaint.setStrokeCap(Paint.Cap.BUTT);
+        pixelBoxPaint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(cx, cy, Math.max(2f, half * 0.14f), pixelBoxPaint);
     }
 
     private static int clampInt(int v, int lo, int hi) {
@@ -1516,10 +1656,10 @@ public class MapStatusView extends View {
         }
     }
 
-    // Draws the real ROM area-name graphic (e.g. "BRINSTAR") small and
-    // translucent in the top-left corner of the map, instead of a big banner
-    // across the top - just there to identify the area without covering any
-    // of the actual room layout underneath it.
+    // Draws the real ROM area-name graphic (e.g. "BRINSTAR") small, on its
+    // own opaque nameplate, in the top-left corner of the map, instead of a
+    // big banner across the top - just there to identify the area without
+    // covering much of the actual room layout underneath it.
     private void drawAreaLabel(Canvas canvas, float left, float top, float right, int area) {
         float width = right - left;
         float labelW = width * 0.32f;
@@ -1530,14 +1670,26 @@ public class MapStatusView extends View {
 
     // Shared by the single-area corner label above and each world-view
     // area's label: scales a 96x8px area-name graphic to labelW wide
-    // (preserving its 12:1 aspect ratio), centered on (centerX, centerY), no
-    // background box - drawn directly over the map at reduced opacity so it
-    // reads as a subtle identifier rather than covering the room layout.
+    // (preserving its 12:1 aspect ratio), centered on (centerX, centerY), on
+    // top of a small opaque nameplate (drawPixelBox, same bordered-box style
+    // used everywhere else in this app) instead of drawn translucently
+    // straight onto the map. The earlier translucent-no-backing approach
+    // (labelBitmapPaint at alpha 150, no box) blended into busy/colorful map
+    // art badly enough in the zoomed-out world view that area names were
+    // sometimes unreadable there, even though the same label read fine in
+    // the single-area view against a quieter background - an opaque plate
+    // behind the text fixes both at once by guaranteeing contrast
+    // regardless of what's under it.
+    private final RectF labelPlateRect = new RectF();
     private void drawLabelBitmap(Canvas canvas, Bitmap label, float centerX, float centerY, float labelW) {
         float labelH = labelW * (LABEL_PX_H / (float) LABEL_PX_W);
+        float padX = labelW * 0.10f, padY = labelH * 0.35f;
+        labelPlateRect.set(centerX - labelW / 2f - padX, centerY - labelH / 2f - padY,
+                centerX + labelW / 2f + padX, centerY + labelH / 2f + padY);
+        drawPixelBox(canvas, labelPlateRect, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
         Rect dest = new Rect((int) (centerX - labelW / 2f), (int) (centerY - labelH / 2f),
                 (int) (centerX + labelW / 2f), (int) (centerY + labelH / 2f));
-        canvas.drawBitmap(label, null, dest, labelBitmapPaint);
+        canvas.drawBitmap(label, null, dest, mapPaint);
     }
 
     private void enterWorldView() {
@@ -1621,6 +1773,7 @@ public class MapStatusView extends View {
                 }
                 worldCompositeBitmap.setPixels(worldCompositePixels, 0, WORLD_CANVAS_PX_W, 0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
                 worldAreaDrawn[a] = true;
+                recomputeWorldLabelCentroids();
 
                 // Bake in any connector whose both endpoints are now drawn,
                 // right away - a junction only needs to be drawn once, ever.
@@ -1638,6 +1791,36 @@ public class MapStatusView extends View {
                     }
                 }
             }
+        }
+    }
+
+    // Recomputes worldLabelCenterX/Y from worldPixelOwner - a full scan
+    // rather than incrementally tracked during the composite loop above,
+    // since ownership of any given pixel can change hands between areas on
+    // a LATER redraw (the smaller-box-wins tiebreak - see
+    // AREA_BBOX_TILES's comment - can let a later-drawn small area reclaim
+    // pixels a larger area initially won), which would make an
+    // incrementally-accumulated centroid silently drift wrong over time.
+    // Only runs once per ensureWorldAreaFresh call (every
+    // WORLD_REFRESH_STRIDE frames for whichever single area just redrew),
+    // so a full 6-area scan here is cheap relative to that cadence.
+    private void recomputeWorldLabelCentroids() {
+        long[] sumX = new long[6], sumY = new long[6];
+        int[] count = new int[6];
+        for (int y = 0; y < WORLD_CANVAS_PX_H; y++) {
+            int row = y * WORLD_CANVAS_PX_W;
+            for (int x = 0; x < WORLD_CANVAS_PX_W; x++) {
+                byte owner = worldPixelOwner[row + x];
+                if (owner < 0) continue;
+                sumX[owner] += x;
+                sumY[owner] += y;
+                count[owner]++;
+            }
+        }
+        for (int a = 0; a < 6; a++) {
+            if (count[a] == 0) continue;
+            worldLabelCenterX[a] = (sumX[a] / (float) count[a]) / 8f;
+            worldLabelCenterY[a] = (sumY[a] / (float) count[a]) / 8f;
         }
     }
 
@@ -1707,13 +1890,20 @@ public class MapStatusView extends View {
         float scale = Math.min(availW / canvasW, availH / canvasH);
 
         // Clamp the pan-adjusted center so the viewport can't scroll past
-        // the shared canvas's real edges (mirrors drawMap's own srcLeft/Top
-        // clamp against MAP_PX_W/H, just expressed as a center-point clamp
-        // here since drawWorldView scales-to-fit rather than cropping a
-        // source Rect).
+        // the EXPLORED region's own edges (visMinX/Y..visMaxX/Y, with its
+        // margin) - NOT the full WORLD_CANVAS_TILES_W/H shared canvas.
+        // That canvas covers all 6 areas' declared layout space, most of
+        // which is empty/unexplored for any save that hasn't 100%'d the
+        // game; clamping against its much-larger bounds let a high enough
+        // zoom pan the viewport past the explored art entirely, showing
+        // plain background color at the panel edge (confirmed on-device -
+        // visible black/empty margin at max zoom). A half-width/height
+        // wider than the explored region on its own just re-clamps to the
+        // region's own center, so this degrades gracefully instead of
+        // needing a separate branch for "zoomed out past the region size."
         float halfW = canvasW / 2f, halfH = canvasH / 2f;
-        centerX = clampFloat(centerX, halfW, WORLD_CANVAS_TILES_W - halfW);
-        centerY = clampFloat(centerY, halfH, WORLD_CANVAS_TILES_H - halfH);
+        centerX = clampFloat(centerX, visMinX + halfW, visMaxX - halfW);
+        centerY = clampFloat(centerY, visMinY + halfH, visMaxY - halfH);
         float viewMinX = centerX - halfW, viewMinY = centerY - halfH;
 
         float originX = left + (availW - canvasW * scale) / 2f - viewMinX * scale;
@@ -1728,16 +1918,29 @@ public class MapStatusView extends View {
                 (int) (originX + WORLD_CANVAS_TILES_W * scale), (int) (originY + WORLD_CANVAS_TILES_H * scale));
         canvas.drawBitmap(worldCompositeBitmap, src, dest, mapPaint);
 
+        // One shared label width for every area, NOT scaled from each
+        // area's own declared layout-box width - that box's size varies a
+        // lot between areas (Tourian's is much narrower than Crateria's,
+        // for example) and has nothing to do with how big the area's NAME
+        // is, so sizing text from it made some labels (Tourian, Wrecked
+        // Ship) tiny and hard to read next to others. A single fixed
+        // fraction of the panel width keeps every area name the same,
+        // legible size regardless of that area's own box/room-cluster size.
+        float worldLabelW = (right - left) * 0.16f;
         for (int area = 0; area < 6; area++) {
             if (!worldAreaDrawn[area] || !haveWorldLabel[area]) continue;
-            float[] l = WORLD_AREA_LAYOUT[area];
-            float dx0 = originX + l[4] * scale, dy0 = originY + l[5] * scale;
-            float dx1 = dx0 + (l[2] - l[0]) * scale;
-            float labelW = Math.min((dx1 - dx0) * 0.55f, (right - left) * 0.16f);
-            float labelH = labelW * (LABEL_PX_H / (float) LABEL_PX_W);
-            float labelMargin = (right - left) * 0.012f;
-            drawLabelBitmap(canvas, worldLabelBitmaps[area],
-                    dx0 + labelMargin + labelW / 2f, dy0 + labelMargin + labelH / 2f, labelW);
+            // Centered on the area's own REAL explored-pixel centroid
+            // (worldLabelCenterX/Y, from worldPixelOwner - see
+            // recomputeWorldLabelCentroids's own comment), not the
+            // declared layout box's raw corner - that box is deliberately
+            // oversized/overlapping between areas (e.g. Tourian's box
+            // overlaps Brinstar's by 11x10 tiles), so a corner-anchored
+            // label could land inside a DIFFERENT area's own art entirely
+            // (confirmed on-device: Tourian's label rendering stacked
+            // directly under Brinstar's, both inside Brinstar's territory).
+            float labelCx = originX + worldLabelCenterX[area] * scale;
+            float labelCy = originY + worldLabelCenterY[area] * scale;
+            drawLabelBitmap(canvas, worldLabelBitmaps[area], labelCx, labelCy, worldLabelW);
         }
 
         if (remappedCurrent >= 0) {
