@@ -28,14 +28,16 @@ item system.
 |---|---|
 | ![Main gameplay screen](docs/screenshots/main-gameplay.png) | ![Second screen world map](docs/screenshots/second-screen-map.png) |
 
-| Second screen: single room, schematic | Second screen: single room, real texture |
+| Second screen: single room | Second screen: Map Station reveal |
 |---|---|
-| ![Second screen schematic room view](docs/screenshots/second-screen-map-room.png) | ![Second screen real-texture room view](docs/screenshots/second-screen-texture-map.png) |
+| ![Second screen room view](docs/screenshots/second-screen-map-room.png) | ![Second screen Map Station reveal](docs/screenshots/second-screen-map-station.png) |
 
-The real-texture room view (right, above) is still in development. It is
-usable now, you can clearly tell where you are and where everything is,
-but it currently has graphical glitches (visible in the screenshot on the
-right edge of the room). It will get cleaned up over time.
+The Map Station screenshot (right, above) shows Crateria rendered dimmer
+than Brinstar below it: Crateria's Map Station has been collected, so its
+whole layout is shown even into rooms never actually visited, while
+Brinstar (no Map Station yet) only shows the handful of rooms actually
+walked through, at full brightness. See
+[Map Station reveal](#map-station-reveal) below.
 
 | Second screen: items | Second screen: ammo |
 |---|---|
@@ -109,17 +111,24 @@ On a device with a second physical display (e.g. the AYN Thor), the second
 screen shows automatically once you're in-game, with three tabs along the
 bottom:
 
-**Map** tab. Two modes, toggled with the picture-frame button:
-- Schematic mode: the real in-game pause-menu map tiles, decoded straight
-  from your ROM, not a hand-drawn placeholder. Pinch or use the +/- buttons
-  to zoom from a single room out to the full connected world map, and pan
-  around with a drag. Only areas and rooms you've actually explored are
-  shown, matching the real game's own reveal-as-you-go rule.
-- Real-texture mode: the actual room background art (walls, floor,
-  decoration) instead of schematic rectangles, for the room you're
-  currently standing in. Also explored-only, and clipped to the room's real
-  pixel bounds. Still in development: usable and clear, but it currently
-  has some graphical glitches (see the screenshot above).
+**Map** tab. The real in-game pause-menu map tiles, decoded straight from
+your ROM, not a hand-drawn placeholder. Pinch, or use the +/- buttons, to
+zoom from a single room out to the full connected world map, and pan around
+with a drag. The nested-squares button jumps straight between the two ends
+of that range: tap it to snap to a close-up of the room you're standing in,
+tap again to snap back to the full world view.
+
+#### Map Station reveal
+By default, only rooms you've actually explored are shown, matching the
+real game's own reveal-as-you-go rule. Once you collect an area's Map
+Station item, that area's *entire* known room layout is also shown -
+including rooms you've never set foot in - the same way the real in-game
+pause map works. Rooms revealed this way but not yet actually visited are
+rendered dimmer than rooms you've walked through, so you can tell the two
+apart at a glance (see the screenshot above: Crateria's Map Station is
+collected, so it's shown in full but dimmed, while Brinstar - no Map
+Station yet - only shows the few rooms actually walked, at full
+brightness).
 
   The world map's area layout (where Crateria sits relative to Brinstar,
   Norfair, and so on) is not eyeballed. It's derived from every real
@@ -157,10 +166,13 @@ Gamepad input works out of the box. On the Thor specifically:
   `main.c`'s `__ANDROID__` guard in `RemapSdlButton`, since SDL's
   controller database doesn't have an entry for this device yet).
 - L2/R2 cycle your armed ammo type without needing to open the second
-  screen's Ammo tab. This device reports L2/R2 as plain digital buttons
-  rather than analog triggers, so they're read directly in
-  `MainActivity.dispatchKeyEvent` instead of through the normal gamepad
-  path.
+  screen's Ammo tab. Handled directly in `MainActivity.dispatchKeyEvent`
+  (Android's digital `KEYCODE_BUTTON_L2/R2` key events) rather than through
+  SDL's normal analog-trigger gamepad path, since some of the Thor's L2/R2
+  input-mode settings report both digital and analog events for the same
+  physical press; `main.c` explicitly ignores the analog trigger axis path
+  for L2/R2 on Android so only one source is ever live, regardless of how
+  the device is configured.
 
 Quicksave/quickload (useful for testing without replaying long stretches):
 hold L1+R1 and press Start to save, Back/Select to load. Bound via

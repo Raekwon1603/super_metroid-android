@@ -14,6 +14,18 @@
 // sm_82.c/sm_90.c each redefine kPauseMenuMapData/kPauseMenuMapTilemaps
 // locally rather than sharing a header.
 #define kPauseMenuMapTilemaps ((LongPtr *)RomFixedPtr(0x82964a))
+// Per-area room-layout reveal data granted by that area's Map Station item
+// (LoadPauseMenuMapTilemap, sm_82.c:1574-1607) - a SEPARATE 256-byte bit
+// array per area from map_tiles_explored (which tiles you've actually
+// walked over): kPauseMenuMapData[area_index] points to that area's own
+// 256-byte reveal bitmap, same bit-packing as map_tiles_explored (one bit
+// per map tile, MSB-first per byte). Real vanilla behavior when the map
+// station IS owned: a tile is shown if EITHER explored OR present in this
+// map-station data (never both required) - explored tiles draw normally,
+// map-station-only tiles draw with the tile entry's own bit 0x400 left set
+// (a dim/"known but not visited" rendering flag the real tilemap format
+// carries per-tile, cleared only for actually-explored tiles).
+#define kPauseMenuMapData ((const uint16 *)RomFixedPtr(0x829717))
 #define kMapTileGfx ((const uint8 *)RomFixedPtr(0xb68000))  // 768 tiles x 32 bytes, SNES 4bpp
 #define kPauseScreenPalettes ((const uint16 *)RomFixedPtr(0xb6f000))  // 256 x BGR555
 #define kMapTileCount 768
@@ -503,6 +515,17 @@ bool SM2_DecodeExploredGridForArea(int area, uint8 *out) {
   return true;
 }
 
+// Decodes the given area's Map Station reveal bitmap (kPauseMenuMapData) -
+// same 256-byte-per-area bit layout as map_tiles_explored, so
+// DecodeExploredGridFrom's own unpacking applies unchanged. Only meaningful
+// if that area's map station has actually been collected
+// (map_station_byte_array[area] != 0) - callers check that separately,
+// matching real vanilla's own gate (LoadPauseMenuMapTilemap, sm_82.c:1582).
+static void GetMapStationGridForArea(int remapped_area, uint8 *out) {
+  const uint8 *bits = (const uint8 *)RomPtr_82(kPauseMenuMapData[remapped_area]);
+  DecodeExploredGridFrom(bits, out);
+}
+
 bool SM2_RenderAreaMap(int area, uint32 *out) {
   if (!g_rom) return false;  // ROM not loaded yet - see the header comment.
 
@@ -517,9 +540,23 @@ bool SM2_RenderAreaMap(int area, uint32 *out) {
   uint8 explored[kMapGridW * kMapGridH];
   GetExploredGridForArea(remapped_area, explored);
 
+  // Map Station data supplements explored tiles (never replaces them): a
+  // tile the player hasn't walked to yet still shows if that area's map
+  // station has been collected and its reveal data includes that tile -
+  // real vanilla behavior (LoadPauseMenuMapTilemap, sm_82.c:1582-1607).
+  // Only decoded/consulted when the station is actually owned, matching
+  // the real gate exactly rather than reading (and mis-showing) reveal
+  // data the player hasn't actually earned yet.
+  uint8 map_station[kMapGridW * kMapGridH];
+  bool have_map_station = map_station_byte_array[remapped_area] != 0;
+  if (have_map_station) GetMapStationGridForArea(remapped_area, map_station);
+
   for (int ty = 0; ty < kMapGridH; ty++) {
     for (int tx = 0; tx < kMapGridW; tx++) {
-      if (!explored[ty * kMapGridW + tx]) {
+      int idx = ty * kMapGridW + tx;
+      bool is_explored = explored[idx] != 0;
+      bool is_map_station_only = !is_explored && have_map_station && map_station[idx];
+      if (!is_explored && !is_map_station_only) {
         FillTilePixels(out, tx, ty, kUnexploredColor);
         continue;
       }
@@ -548,7 +585,22 @@ bool SM2_RenderAreaMap(int area, uint32 *out) {
           int sx = flip_x ? 7 - px : px;
           int ci = Snes4bppColorIndex(tile, sx, sy);
           uint16 color15 = pal[palette_row * 16 + ci];
-          out[base + (uint32)py * (kMapGridW * 8) + px] = Snes15ToArgb(color15);
+          uint32 argb = Snes15ToArgb(color15);
+          if (is_map_station_only) {
+            // Dim map-station-only (not-yet-visited) tiles, matching real
+            // vanilla's own visual distinction for these rooms (the tile
+            // entry's own bit 0x400 stays set for them, vs. cleared for
+            // explored tiles - LoadPauseMenuMapTilemap, sm_82.c:1591-1596).
+            // Halve each RGB channel rather than trying to reproduce the
+            // real hardware's exact tinting, since that bit is a PPU
+            // color-math flag this decoder has no equivalent pipeline for.
+            uint32 a = argb & 0xFF000000u;
+            uint32 r = ((argb >> 16) & 0xFF) / 2;
+            uint32 g = ((argb >> 8) & 0xFF) / 2;
+            uint32 b = (argb & 0xFF) / 2;
+            argb = a | (r << 16) | (g << 8) | b;
+          }
+          out[base + (uint32)py * (kMapGridW * 8) + px] = argb;
         }
       }
     }
