@@ -201,9 +201,27 @@ JNIEXPORT jint JNICALL JFN(getSelectedAmmo)(JNIEnv *env, jclass clazz) {
   return SM2_GetSelectedAmmo();
 }
 
+// Locked: writes hud_item_index (and reads samus_missiles/etc for the
+// ownership check in SM2_CycleSelectedAmmo) from the UI/JNI thread while
+// the game loop thread may be concurrently mid-RtlRunFrame. Under RM_MINE
+// this used to be safe unlocked (a plain field write racing a decompiled C
+// function call has no meaningful tear window), but RM_THEIRS drives
+// gameplay via a real cycle-stepped 65816 interpreter that reads/writes
+// g_ram far more granularly per frame - an unlocked cross-thread write here
+// could interleave with the interpreter's own read-modify-write of the
+// same or adjacent bytes mid-frame and get silently clobbered a frame
+// later. Confirmed on-device as a "select then immediately deselect"
+// glitch on the Thor's L2/R2 shortcut, worse the longer the JNI call's
+// wall-clock timing has to land badly relative to the frame loop (i.e.
+// more likely on a slower/harder physical trigger press). SM2_LockGameState
+// guards exactly RtlRunFrame's call span (see main.c), so taking it here
+// makes this a genuine atomic edit relative to the game's own frame
+// boundary instead of a real cross-thread race.
 JNIEXPORT void JNICALL JFN(setSelectedAmmo)(JNIEnv *env, jclass clazz, jint index) {
   (void)env; (void)clazz;
+  SM2_LockGameState();
   SM2_SetSelectedAmmo(index);
+  SM2_UnlockGameState();
 }
 
 // Called from MainActivity.dispatchKeyEvent (main UI thread) when the
@@ -211,14 +229,13 @@ JNIEXPORT void JNICALL JFN(setSelectedAmmo)(JNIEnv *env, jclass clazz, jint inde
 // why this bypasses SDL's GameController layer entirely (this device
 // reports L2/R2 as digital AKEYCODE_BUTTON_L2/R2 key events outside SDL's
 // SDL_GameControllerButton enum range, which main.c's own gamepad-axis
-// path never sees). A plain hud_item_index read-then-write from a
-// different thread than the game loop is the same simplification
-// SM2_SetSelectedAmmo already makes safely (see its own comment) - no
-// SM2_LockGameState needed, that mutex only guards DecompressToMem's
-// shared cursor, not this field.
+// path never sees). See setSelectedAmmo's own comment just above for why
+// this needs SM2_LockGameState too.
 JNIEXPORT void JNICALL JFN(cycleSelectedAmmo)(JNIEnv *env, jclass clazz, jint direction) {
   (void)env; (void)clazz;
+  SM2_LockGameState();
   SM2_CycleSelectedAmmo(direction);
+  SM2_UnlockGameState();
 }
 
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {

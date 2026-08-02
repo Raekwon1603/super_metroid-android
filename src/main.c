@@ -863,8 +863,24 @@ static void HandleGamepadAxisInput(int gamepad_id, int axis, int value) {
     }
     g_gamepad_buttons = buttons;
   } else if ((axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT)) {
+#ifdef __ANDROID__
+    // On Android, L2/R2 are already handled exclusively via
+    // MainActivity.dispatchKeyEvent's digital KEYCODE_BUTTON_L2/R2
+    // interception (see its own comment). Some device firmware/settings
+    // (the AYN Thor's L2/R2 input-mode option, when set to report BOTH
+    // digital and analog simultaneously rather than just one) can deliver
+    // this SDL_CONTROLLERAXISMOTION path for the SAME physical press too -
+    // acting on it here as well double-triggers whatever's bound to L2/R2
+    // (e.g. the ammo-cycle shortcut firing twice per press, confirmed
+    // on-device as a "select then immediately deselect" glitch that
+    // persisted even after fixing real, unrelated auto-cancel-flag races,
+    // because the actual double-trigger was happening here, not there).
+    // Always ignore this path on Android so only one source of L2/R2 is
+    // ever live, regardless of how the device is configured.
+#else
     if (value < 12000 || value >= 16000)  // hysteresis
       HandleGamepadInput(axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? kGamepadBtn_L2 : kGamepadBtn_R2, value >= 12000);
+#endif
   }
 }
 

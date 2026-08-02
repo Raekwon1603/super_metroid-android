@@ -580,8 +580,27 @@ void SM2_SetSelectedAmmo(int index) {
   // safe since hud_item_index is a plain selection index (0=none,
   // 1=Missiles, 2=Supers, 3=PBs, 4=Grapple, 5=X-Ray), not a bitfield, and
   // the HUD/aim-cursor code re-reads it every frame rather than caching it.
+  // Must also clear BOTH real auto-cancel flags, or the selection gets
+  // silently wiped a couple of real frames later (confirmed on-device: a
+  // reliable ~30ms select-then-deselect on every single L2/R2 press):
+  // - samus_auto_cancel_hud_item_index (g_ram+0xA04): the real Select
+  //   handler leaves this set when the item-cancel (Y) button happened to
+  //   be held mid-select, arming a real one-shot "auto-cancel next check"
+  //   (e.g. sm_88.c:852-854, sm_9b.c, sm_90.c:3882-3884).
+  // - hud_auto_cancel_flag (g_ram+0x9EA): checked (and always immediately
+  //   re-zeroed) only in ResetProjectileData (sm_90.c:2505-2508), called on
+  //   door/elevator transitions (sm_82.c:4033, sm_a3.c:519). Nothing in
+  //   this decompile ever WRITES it, so under RM_MINE it just sat at its
+  //   sm_81.c:2470 init value (0) and never mattered; under RM_THEIRS the
+  //   real ROM sets it via machine code this decompile never modeled, and
+  //   it was catching our write on the very next door/room-transition
+  //   check regardless of what set it. Forcing it back to 0 here
+  //   neutralizes that real ROM behavior without needing to know its exact
+  //   vanilla trigger condition.
   if (index < 0 || index > 5) return;
   hud_item_index = index;
+  samus_auto_cancel_hud_item_index = 0;
+  hud_auto_cancel_flag = 0;
 }
 
 // Cycles hud_item_index by +1/-1 (direction), skipping any ammo type not
@@ -593,11 +612,12 @@ void SM2_SetSelectedAmmo(int index) {
 // called from main.c's L2/R2 trigger handling, outside SM's own per-frame
 // input read) risked acting a frame out of sync with the game's own input
 // state. A direct hud_item_index write is the same simplification
-// SM2_SetSelectedAmmo already makes safely. Only cycles between
-// None/Missiles/Supers/PowerBombs (0-3) - Grapple/X-Ray (4-5) have no real
-// ammo count to arm/disarm and aren't reachable from the second-screen
-// ammo tab either, so skipping them here keeps this consistent with that
-// same UI.
+// SM2_SetSelectedAmmo already makes safely (see its own comment on why
+// BOTH samus_auto_cancel_hud_item_index and hud_auto_cancel_flag must be
+// cleared here too). Only cycles between None/Missiles/Supers/PowerBombs
+// (0-3) - Grapple/X-Ray (4-5) have no real ammo count to arm/disarm and
+// aren't reachable from the second-screen ammo tab either, so skipping
+// them here keeps this consistent with that same UI.
 void SM2_CycleSelectedAmmo(int direction) {
   if (direction != 1 && direction != -1) return;
   int start = hud_item_index;
@@ -610,6 +630,8 @@ void SM2_CycleSelectedAmmo(int direction) {
         || (index == kSM2Ammo_PowerBombs && samus_power_bombs > 0);
     if (owned) {
       hud_item_index = index;
+      samus_auto_cancel_hud_item_index = 0;
+      hud_auto_cancel_flag = 0;
       return;
     }
   }
