@@ -1053,6 +1053,26 @@ getout:
     g_got_mismatch_count--;
 }
 
+// Under RM_THEIRS, gameplay runs entirely inside the CPU-emulated core, so
+// the real ROM's own save routine writes straight to the emulated
+// cartridge's SRAM (g_sram, aliased to g_snes->cart->ram) and returns -
+// none of the decompiled C save functions (SaveToSram() and friends in
+// sm_80.c/sm_81.c, the only callers of RtlWriteSram()) ever run, so nothing
+// ever flushes that SRAM to saves/sm.srm on disk. Confirmed on-device: a
+// full save-station save left saves/sm.srm missing entirely. Poll for a
+// change once per frame and flush to disk when found, so RM_THEIRS gets the
+// same on-disk persistence RM_MINE/RM_BOTH get for free via their own
+// SaveToSram() call sites.
+static void FlushSramIfChangedUnderRmTheirs(void) {
+  static uint8 last_sram[0x2000];
+  static bool have_last;
+  if (!have_last || memcmp(last_sram, g_sram, 0x2000) != 0) {
+    RtlWriteSram();
+    memcpy(last_sram, g_sram, 0x2000);
+    have_last = true;
+  }
+}
+
 void RtlRunFrameCompare(uint16 input, int run_what) {
   g_snes->input1->currentState = input;
 
@@ -1060,6 +1080,7 @@ void RtlRunFrameCompare(uint16 input, int run_what) {
     g_use_my_apu_code = false;
     RunOneFrameOfGame_Emulated();
     DrawFrameToPpu();
+    FlushSramIfChangedUnderRmTheirs();
 
   } else if (g_runmode == RM_MINE) {
     g_use_my_apu_code = true;
