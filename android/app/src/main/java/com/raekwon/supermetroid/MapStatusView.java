@@ -1,6 +1,7 @@
 package com.raekwon.supermetroid;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -50,6 +51,12 @@ public class MapStatusView extends View {
     private static final float MAX_ZOOM = 6f;
     private static final float DEFAULT_ZOOM = MIN_ZOOM;
     private static final float ZOOM_BUTTON_STEP = 1.4f;
+    // The room view's auto-fit floor is MIN_ZOOM, but the zoom-out button
+    // allows one extra step below that (zoomed further out than auto-fit,
+    // shrinking the room within the panel) before crossing over into
+    // worldView - so the button always leaves one more "zoom out" press
+    // available instead of jumping straight to the world map.
+    private static final float ZOOM_OUT_BUTTON_FLOOR = MIN_ZOOM / ZOOM_BUTTON_STEP;
     private float zoomFactor = DEFAULT_ZOOM;
 
     // Same idea as zoomFactor/panOffsetX/Y above but for the WORLD view
@@ -102,6 +109,31 @@ public class MapStatusView extends View {
     // Margin added around the explored bbox, as a fraction of its own size,
     // so revealed rooms don't touch the screen edge.
     private static final float AUTOFIT_MARGIN_FRAC = 0.25f;
+
+    // Height of the optional health/ammo readout strip at the top of the
+    // MAP tab, as a fraction of the map panel's own height - see the
+    // SETTINGS tab's "STATUS ON MAP" toggle.
+    private static final float STATUS_STRIP_FRAC = 0.11f;
+    // Same row-wrap width as the real HUD's own energy-tank tilemap layout
+    // (kEnergyTankIconTilemapOffsets in sm_80.c: 7 slots per row, 2 rows =
+    // 14 tanks, vanilla SM's real maximum).
+    private static final int PIPS_PER_ROW = 7;
+    private static final int MAX_STATUS_STRIP_PIPS = PIPS_PER_ROW * 2;
+    private final RectF[] statusStripWeaponRects = { new RectF(), new RectF(), new RectF() };
+    private int statusStripTouchPointerId = -1;
+    private boolean showStatusOnMap;
+    private boolean crtFilterMain;
+    private boolean hideMainHud;
+    private static final String[] SETTINGS_LABELS = {
+        "STATUS ON MAP", "CRT FILTER", "HIDE MAIN HUD", "SAVE STATES", "REMAP BUTTONS",
+    };
+    private static final int SETTINGS_ROW_STATUS_ON_MAP = 0;
+    private static final int SETTINGS_ROW_CRT_FILTER = 1;
+    private static final int SETTINGS_ROW_HIDE_HUD = 2;
+    private static final int SETTINGS_ROW_SAVE_STATES = 3;
+    private static final int SETTINGS_ROW_REMAP = 4;
+    private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF(), new RectF() };
+    private int settingsTouchDownIndex = -1;
 
     // Zoomed all the way out: all 6 named areas composited into one shared
     // canvas at their real relative positions - a single connected map, not
@@ -278,6 +310,10 @@ public class MapStatusView extends View {
     private static final int COL_TAB_LABEL = Color.rgb(205, 209, 225);
     private static final int COL_SLOT_BG = Color.rgb(48, 52, 68);
     private static final int COL_DIM_GRAY = Color.rgb(105, 110, 128);
+    // Sampled directly from a real device screenshot's main-screen HUD
+    // energy-tank pip (see drawStatusStrip's own comment on why this isn't
+    // decoded from the ROM like the other HUD icons).
+    private static final int COL_ENERGY_PIP = Color.rgb(204, 71, 145);
     private static final int COL_SAMUS_DOT = Color.rgb(255, 70, 70);
 
     private static final String LOGO_TEXT = "METROID";
@@ -302,9 +338,9 @@ public class MapStatusView extends View {
     // the controller). Content area swaps per-tab; the tab bar itself is
     // always drawn last/on top, pinned to the bottom, same as
     // tmc-android's PaintTabBar-always-last-every-frame approach.
-    private enum Tab { MAP, EQUIPMENT, AMMO }
+    private enum Tab { MAP, EQUIPMENT, AMMO, SETTINGS }
     private Tab currentTab = Tab.MAP;
-    private final RectF[] tabButtonRects = { new RectF(), new RectF(), new RectF() };
+    private final RectF[] tabButtonRects = { new RectF(), new RectF(), new RectF(), new RectF() };
     private int tabTouchPointerId = -1;
     private int tabTouchDownIndex = -1;
 
@@ -315,6 +351,13 @@ public class MapStatusView extends View {
     private final Paint dimPaint = new Paint();
     private final Paint logoLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint zoomBtnIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // Scratch paint for the STATUS ON MAP strip and SETTINGS tab rows -
+    // separate from zoomBtnIconPaint since those mutate color/style/stroke
+    // and are drawn in the same frame as the actual zoom buttons, which
+    // also use zoomBtnIconPaint; sharing it left the zoom +/- glyphs
+    // visibly tinted pink from the energy-pip fill color (confirmed
+    // on-device).
+    private final Paint statusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint panelBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     // Reused by drawPixelBox for its fill/border/highlight/corner strokes -
     // one mutable Paint instead of allocating new ones per box per frame.
@@ -577,6 +620,12 @@ public class MapStatusView extends View {
         superMissileIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
         powerBombIconBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
         wireframeBitmap = Bitmap.createBitmap(WIREFRAME_PX_W, WIREFRAME_PX_H, Bitmap.Config.ARGB_8888);
+
+        SharedPreferences prefs = context.getSharedPreferences("secondscreen", Context.MODE_PRIVATE);
+        showStatusOnMap = prefs.getBoolean("showStatusOnMap", false);
+        crtFilterMain = prefs.getBoolean("crtFilterMain", false);
+        hideMainHud = prefs.getBoolean("hideMainHud", false);
+        // TODO: GameState.setCrtFilter/setHudHidden native methods not implemented yet.
     }
 
     @Override
@@ -602,11 +651,12 @@ public class MapStatusView extends View {
                 w - panelMargin, mapBottom + controlsBarH - panelMargin * 0.2f);
         hudBarRect.set(panelMargin, h - hudBarH + panelMargin * 0.3f, w - panelMargin, h - panelMargin);
 
-        // 3 equal-width tab buttons filling the footer strip, small gaps
+        // 4 equal-width tab buttons filling the footer strip, small gaps
         // between them - same layout idea as tmc-android's PaintTabBar.
+        int tabCount = tabButtonRects.length;
         float tabGap = hudBarRect.width() * 0.012f;
-        float tabW = (hudBarRect.width() - tabGap * 2) / 3f;
-        for (int i = 0; i < 3; i++) {
+        float tabW = (hudBarRect.width() - tabGap * (tabCount - 1)) / tabCount;
+        for (int i = 0; i < tabCount; i++) {
             float tx0 = hudBarRect.left + i * (tabW + tabGap);
             tabButtonRects[i].set(tx0, hudBarRect.top, tx0 + tabW, hudBarRect.bottom);
         }
@@ -645,6 +695,24 @@ public class MapStatusView extends View {
                 for (int i = 0; i < ammoSlotRects.length; i++) {
                     if (ammoSlotRects[i].contains(x, y)) {
                         ammoTouchPointerId = event.getPointerId(0);
+                        return true;
+                    }
+                }
+            }
+
+            if (currentTab == Tab.SETTINGS) {
+                for (int i = 0; i < settingsRowRects.length; i++) {
+                    if (settingsRowRects[i].contains(x, y)) {
+                        settingsTouchDownIndex = i;
+                        return true;
+                    }
+                }
+            }
+
+            if (currentTab == Tab.MAP && showStatusOnMap) {
+                for (int i = 0; i < statusStripWeaponRects.length; i++) {
+                    if (statusStripWeaponRects[i].contains(x, y)) {
+                        statusStripTouchPointerId = event.getPointerId(0);
                         return true;
                     }
                 }
@@ -715,6 +783,32 @@ public class MapStatusView extends View {
             }
             ammoTouchPointerId = -1;
             return true;
+        } else if (action == MotionEvent.ACTION_UP && settingsTouchDownIndex != -1) {
+            int idx = settingsTouchDownIndex;
+            if (idx >= 0 && idx < settingsRowRects.length && settingsRowRects[idx].contains(event.getX(), event.getY())) {
+                settingsTap(idx);
+            }
+            settingsTouchDownIndex = -1;
+            return true;
+        } else if (action == MotionEvent.ACTION_UP && statusStripTouchPointerId != -1) {
+            float x = event.getX(), y = event.getY();
+            int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
+            int currentlySelected = GameState.getSelectedAmmo();
+            for (int i = 0; i < statusStripWeaponRects.length; i++) {
+                if (statusStripWeaponRects[i].contains(x, y)) {
+                    // Same tap-to-arm/tap-again-to-disarm behavior as the
+                    // AMMO tab's slots - see that ACTION_UP handler's own
+                    // comment for why a second tap deselects instead of
+                    // being a no-op.
+                    if (maxCounts[i] > 0) {
+                        boolean alreadySelected = currentlySelected == AMMO_SLOTS[i];
+                        GameState.setSelectedAmmo(alreadySelected ? GameState.AMMO_NONE : AMMO_SLOTS[i]);
+                    }
+                    break;
+                }
+            }
+            statusStripTouchPointerId = -1;
+            return true;
         } else if (action == MotionEvent.ACTION_UP && zoomButtonPointerId != -1) {
             RectF btn = zoomButtonIsIn ? zoomInBtn : zoomOutBtn;
             if (btn.contains(event.getX(), event.getY())) {
@@ -737,8 +831,8 @@ public class MapStatusView extends View {
                     worldZoomFactor = Math.max(MIN_WORLD_ZOOM, worldZoomFactor / ZOOM_BUTTON_STEP);
                 } else {
                     float prospective = zoomFactor / ZOOM_BUTTON_STEP;
-                    if (prospective < MIN_ZOOM) {
-                        zoomFactor = MIN_ZOOM;
+                    if (prospective < ZOOM_OUT_BUTTON_FLOOR) {
+                        zoomFactor = ZOOM_OUT_BUTTON_FLOOR;
                         enterWorldView();
                     } else {
                         zoomFactor = prospective;
@@ -753,9 +847,12 @@ public class MapStatusView extends View {
             tabTouchDownIndex = -1;
             ammoTouchPointerId = -1;
             roomWorldToggleBtnPointerId = -1;
+            statusStripTouchPointerId = -1;
+            settingsTouchDownIndex = -1;
         }
 
-        if (currentTab == Tab.MAP && zoomButtonPointerId == -1) {
+        if (currentTab == Tab.MAP && zoomButtonPointerId == -1 && statusStripTouchPointerId == -1
+                && roomWorldToggleBtnPointerId == -1) {
             scaleDetector.onTouchEvent(event);
             tapDetector.onTouchEvent(event);
         }
@@ -803,14 +900,39 @@ public class MapStatusView extends View {
                             float borderInset = Math.min(panelRect.width(), panelRect.height()) * 0.02f + 1.5f;
                             panelInnerRect.set(panelRect.left + borderInset, panelRect.top + borderInset,
                                     panelRect.right - borderInset, panelRect.bottom - borderInset);
+                            // Reserve a strip at the top of the panel for the
+                            // optional health/ammo readout (SETTINGS tab's
+                            // "STATUS ON MAP" toggle) so it never overlaps map
+                            // content - drawn after the map, not clipped to
+                            // it. Two rows (matching the real HUD's own
+                            // energy-tank layout, 7 pips per row) once tank
+                            // count exceeds one row's worth - see
+                            // statusStripRowCount().
+                            float mapTop = panelInnerRect.top;
+                            if (showStatusOnMap) {
+                                mapTop = panelInnerRect.top + panelInnerRect.height() * STATUS_STRIP_FRAC * statusStripRowCount();
+                            }
                             int clipSave = canvas.save();
-                            canvas.clipRect(panelInnerRect);
+                            canvas.clipRect(panelInnerRect.left, mapTop, panelInnerRect.right, panelInnerRect.bottom);
                             if (worldView) {
-                                drawWorldView(canvas, panelInnerRect.left, panelInnerRect.top, panelInnerRect.right, panelInnerRect.bottom);
+                                drawWorldView(canvas, panelInnerRect.left, mapTop, panelInnerRect.right, panelInnerRect.bottom);
                             } else {
-                                drawMap(canvas, panelInnerRect.left, panelInnerRect.top, panelInnerRect.right, panelInnerRect.bottom);
+                                drawMap(canvas, panelInnerRect.left, mapTop, panelInnerRect.right, panelInnerRect.bottom);
                             }
                             canvas.restoreToCount(clipSave);
+                            if (showStatusOnMap) {
+                                // Match the room map's own unexplored-tile fill
+                                // (UNEXPLORED_FILL) in room view, so the strip's
+                                // background blends into the void above/around
+                                // Samus's explored area instead of reading as a
+                                // separate solid bar in a different shade.
+                                // World view's map art already fills edge-to-
+                                // edge with no void margin, so it keeps the
+                                // normal panel background there instead.
+                                int stripBg = worldView ? COL_PANEL_BG : UNEXPLORED_FILL;
+                                drawStatusStrip(canvas, panelInnerRect.left, panelInnerRect.top,
+                                        panelInnerRect.right, mapTop, stripBg);
+                            }
                         }
                         break;
                     case EQUIPMENT:
@@ -818,6 +940,9 @@ public class MapStatusView extends View {
                         break;
                     case AMMO:
                         drawAmmoTab(canvas);
+                        break;
+                    case SETTINGS:
+                        drawSettingsTab(canvas);
                         break;
                 }
                 // Re-stroke the border on top of whatever tab content just
@@ -846,15 +971,15 @@ public class MapStatusView extends View {
         if (isAttachedToWindow()) postInvalidateOnAnimation();
     }
 
-    private static final String[] TAB_LABELS = { "MAP", "ITEMS", "AMMO" };
+    private static final String[] TAB_LABELS = { "MAP", "ITEMS", "AMMO", "SETUP" };
 
-    // Persistent 3-button footer tab bar, always drawn last/on top so it
-    // reads as chrome rather than page content - same "content swaps,
-    // chrome persists" approach as tmc-android's PaintTabBar (called every
-    // frame after whichever panel is active). The active tab gets a
-    // highlighted background plus an accent keyline border.
+    // Persistent footer tab bar, always drawn last/on top so it reads as
+    // chrome rather than page content - same "content swaps, chrome
+    // persists" approach as tmc-android's PaintTabBar (called every frame
+    // after whichever panel is active). The active tab gets a highlighted
+    // background plus an accent keyline border.
     private void drawTabBar(Canvas canvas) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < tabButtonRects.length; i++) {
             RectF rect = tabButtonRects[i];
             boolean active = currentTab.ordinal() == i;
             int fill = active ? COL_TAB_ACTIVE_BG : COL_PANEL_BG;
@@ -1146,6 +1271,240 @@ public class MapStatusView extends View {
         }
     }
 
+    // How many pip rows the energy-tank display needs right now: 1 normally,
+    // 2 once tank count exceeds a single row (PIPS_PER_ROW) - mirrors the
+    // real HUD's own two-row wrap.
+    private int statusStripPipRowCount() {
+        int maxTanks = Math.min(GameState.getMaxHealth() / 100, MAX_STATUS_STRIP_PIPS);
+        return maxTanks > PIPS_PER_ROW ? 2 : 1;
+    }
+
+    // Total rows the strip needs - just the pip row(s). Weapon icons/health
+    // number sit BESIDE the pips (to the right), not on their own row below,
+    // per on-device layout feedback - so this no longer adds an extra row
+    // for them. Called both to size the reserved strip area (onDraw) and to
+    // lay out its contents (drawStatusStrip).
+    private int statusStripRowCount() {
+        return statusStripPipRowCount();
+    }
+
+    // Health + ammo readout along the top of the MAP tab's panel - the
+    // "STATUS ON MAP" toggle in SETTINGS. Reuses the same icon bitmaps/
+    // pixel buffers drawAmmoTab lazy-loads (rendered once from the real ROM
+    // HUD graphics, cached thereafter), so this costs nothing extra the
+    // AMMO tab wasn't already paying for once both have been
+    // visited. Weapon icons are tap-to-arm, same as the AMMO tab's slots -
+    // statusStripWeaponRects records where each one last drew so
+    // onTouchEvent can hit-test them.
+    private void drawStatusStrip(Canvas canvas, float left, float top, float right, float bottom, int bgColor) {
+        statusPaint.setStyle(Paint.Style.FILL);
+        statusPaint.setColor(bgColor);
+        canvas.drawRect(left, top, right, bottom, statusPaint);
+        if (!haveMissileIcon) GameState.renderMissileIcon(missileIconPixels);
+        if (missileIconBitmap != null && !haveMissileIcon) {
+            missileIconBitmap.setPixels(missileIconPixels, 0, 24, 0, 0, 24, 16);
+            haveMissileIcon = true;
+        }
+        if (!haveSuperMissileIcon) GameState.renderSuperMissileIcon(superMissileIconPixels);
+        if (superMissileIconBitmap != null && !haveSuperMissileIcon) {
+            superMissileIconBitmap.setPixels(superMissileIconPixels, 0, 16, 0, 0, 16, 16);
+            haveSuperMissileIcon = true;
+        }
+        if (!havePowerBombIcon) GameState.renderPowerBombIcon(powerBombIconPixels);
+        if (powerBombIconBitmap != null && !havePowerBombIcon) {
+            powerBombIconBitmap.setPixels(powerBombIconPixels, 0, 16, 0, 0, 16, 16);
+            havePowerBombIcon = true;
+        }
+        int rowCount = statusStripRowCount();
+        float rowH = (bottom - top) / rowCount;
+        float h = rowH;  // per-row height - pip sizing stays relative to one row
+        float stripH = bottom - top;  // full strip height - weapons/number sizing uses this
+        float textSize = stripH * 0.3f;
+        float pipSize = h * 0.32f;
+        float iconH = stripH * 0.42f;
+
+        // Energy tanks: one pip per 100 energy. HandleHudTilemap's real loop
+        // (sm_80.c:1360-1377) is a do/while with a pre-decrement break
+        // ("if (!--n) break") that runs BEFORE that iteration's own write,
+        // so it always writes one fewer pip than n = maxHealth/100 + 1 -
+        // i.e. exactly maxHealth/100 pips total, not (maxHealth+99)/100 as
+        // it might look at first glance. Confirmed on real hardware: 199
+        // max health (199/100+1=2 loop iterations) shows exactly ONE pip,
+        // not two. Same reasoning for how many are shown filled: r20 =
+        // health/100 is computed once before the loop and only decremented
+        // on a write that actually happens, so the count of filled pips is
+        // just min(health/100, maxTanks). Wraps to a second row past
+        // PIPS_PER_ROW, same as the real HUD's own two-row layout - a
+        // full-game Samus can have 14 tanks (1400 energy). Drawn as a plain
+        // color rather than decoded from the ROM like the ammo icons: none
+        // of the HUD palette's 8 rows reproduced the real pip's actual
+        // on-screen color (204,71,145) for either tile 48 or 49, so rather
+        // than keep guessing at ROM tile/palette data this just uses that
+        // real sampled color directly.
+        int health = GameState.getHealth(), maxHealth = GameState.getMaxHealth();
+        int maxTanks = Math.min(maxHealth / 100, MAX_STATUS_STRIP_PIPS);
+        int filledTanks = Math.min(health / 100, maxTanks);
+        int pipCols = Math.min(maxTanks, PIPS_PER_ROW);
+        int pipRowCount = statusStripPipRowCount();
+        // Tighter gap between the two pip rows, matching the real main-
+        // screen HUD's own spacing (was a full rowH step, same as the
+        // strip's overall row height - visibly more spread out than the
+        // real HUD). The pip block is then centered vertically within the
+        // strip so it doesn't drift toward the top as the step shrinks.
+        float pipRowStep = pipSize * 1.3f;
+        float pipBlockH = pipRowStep * (pipRowCount - 1) + pipSize;
+        float pipBlockTop = top + (stripH - pipBlockH) * 0.5f;
+        for (int i = 0; i < maxTanks; i++) {
+            int row = i / PIPS_PER_ROW, col = i % PIPS_PER_ROW;
+            float rowMidY = pipBlockTop + pipRowStep * row + pipSize * 0.5f;
+            float px = left + h * 0.25f + col * (pipSize + h * 0.06f);
+            RectF dest = new RectF(px, rowMidY - pipSize / 2f, px + pipSize, rowMidY + pipSize / 2f);
+            statusPaint.setStyle(Paint.Style.FILL);
+            statusPaint.setColor(i < filledTanks ? COL_ENERGY_PIP : COL_DIM_GRAY);
+            canvas.drawRect(dest, statusPaint);
+            // White L-shaped gloss matching the real HUD tile exactly (see
+            // the reference crop in commit history): a full-width strip
+            // along the ENTIRE top edge, plus a full-height strip down the
+            // ENTIRE left edge, meeting at the top-left corner - not two
+            // small corner squares. Only on filled pips, same as the real
+            // sprite only showing it against the bright fill.
+            if (i < filledTanks) {
+                statusPaint.setColor(Color.WHITE);
+                float thickness = pipSize * 0.16f;
+                canvas.drawRect(dest.left, dest.top, dest.right, dest.top + thickness, statusPaint);
+                canvas.drawRect(dest.left, dest.top, dest.left + thickness, dest.bottom, statusPaint);
+            }
+        }
+
+        // Health number and weapon icons sit BESIDE the pips, to the right
+        // of the widest pip row, vertically centered across the WHOLE
+        // strip (so with 2 pip rows, the number sits centered between
+        // them, not aligned to either row individually) - pip rows
+        // themselves are untouched, per on-device layout feedback.
+        float midY = top + stripH * 0.5f;
+        float x = left + h * 0.25f + pipCols * (pipSize + h * 0.06f) + h * 0.3f;
+        // Same number the real in-game HUD shows next to the tank pips:
+        // energy WITHIN the current (highest partially-filled) tank, 0-99 -
+        // not the raw total - see HandleHudTilemap's own r18 =
+        // SnesModulus(samus_health, 100) in sm_80.c.
+        String healthText = String.valueOf(health % 100);
+        PixelFont.drawText(canvas, healthText, x, midY - textSize / 2f,
+             PixelFont.pixelSizeForHeight(textSize), Color.WHITE, Paint.Align.LEFT);
+        x += PixelFont.measureWidth(healthText, PixelFont.pixelSizeForHeight(textSize)) + h * 0.6f;
+
+        int[] counts = { GameState.getMissiles(), GameState.getSuperMissiles(), GameState.getPowerBombs() };
+        int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
+        Bitmap[] icons = { missileIconBitmap, superMissileIconBitmap, powerBombIconBitmap };
+        boolean[] haveIcon = { haveMissileIcon, haveSuperMissileIcon, havePowerBombIcon };
+        // Native pixel size of each icon bitmap (24x16, 16x16, 16x16) - all
+        // scaled to the same iconH so they read as a consistent row instead
+        // of the power bomb icon (which happens to have the most opaque
+        // pixels/visual weight) looking oversized next to the others.
+        float[] iconNativeW = { 24f, 16f, 16f };
+        float[] iconNativeH = { 16f, 16f, 16f };
+        int selected = GameState.getSelectedAmmo();
+
+        for (int i = 0; i < 3; i++) {
+            statusStripWeaponRects[i].setEmpty();
+            if (maxCounts[i] <= 0) continue;  // not yet collected - skip, matches in-game HUD behavior
+            float slotStartX = x;
+            if (haveIcon[i]) {
+                float iconW = iconH * (iconNativeW[i] / iconNativeH[i]);
+                RectF dest = new RectF(x, midY - iconH / 2f, x + iconW, midY + iconH / 2f);
+                if (selected == AMMO_SLOTS[i]) {
+                    statusPaint.setStyle(Paint.Style.STROKE);
+                    statusPaint.setStrokeWidth(h * 0.05f);
+                    statusPaint.setColor(COL_ACCENT);
+                    canvas.drawRect(dest.left - h * 0.06f, dest.top - h * 0.06f,
+                            dest.right + h * 0.06f, dest.bottom + h * 0.06f, statusPaint);
+                }
+                canvas.drawBitmap(icons[i], null, dest, mapPaint);
+                x += iconW + h * 0.15f;
+            }
+            String countText = String.valueOf(counts[i]);
+            PixelFont.drawText(canvas, countText, x, midY - textSize / 2f,
+                    PixelFont.pixelSizeForHeight(textSize), Color.WHITE, Paint.Align.LEFT);
+            x += PixelFont.measureWidth(countText, PixelFont.pixelSizeForHeight(textSize));
+            // Generous tap target: the whole icon+count group, not just the icon.
+            statusStripWeaponRects[i].set(slotStartX, top, x, bottom);
+            x += h * 0.5f;
+        }
+    }
+
+    // Vertical list of toggle/action rows, styled like drawAmmoTab's slots
+    // but stacked instead of side-by-side - a scroll isn't needed yet since
+    // this project's settings list is short enough to fit one screen (see
+    // zelda3-android's MinimapView.drawSettingsPanel for the reference
+    // version this is scoped down from - most of its rows are Zelda-
+    // specific mechanics that don't apply here).
+    private void drawSettingsTab(Canvas canvas) {
+        float pad = panelRect.width() * 0.04f;
+        float left = panelRect.left + pad, right = panelRect.right - pad;
+        float top = panelRect.top + pad;
+        float rowH = panelRect.height() * 0.13f;
+        float gap = panelRect.height() * 0.03f;
+
+        for (int i = 0; i < SETTINGS_LABELS.length; i++) {
+            float ry0 = top + i * (rowH + gap);
+            RectF row = settingsRowRects[i];
+            row.set(left, ry0, right, ry0 + rowH);
+
+            drawPixelBox(canvas, row, COL_SLOT_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+
+            String label = SETTINGS_LABELS[i];
+            float textSize = rowH * 0.32f;
+            PixelFont.drawText(canvas, label, row.left + rowH * 0.3f, row.centerY() - textSize / 2f,
+                    PixelFont.pixelSizeForHeight(textSize), COL_TAB_LABEL, Paint.Align.LEFT);
+
+            String value;
+            if (i == SETTINGS_ROW_STATUS_ON_MAP) value = showStatusOnMap ? "ON" : "OFF";
+            else if (i == SETTINGS_ROW_CRT_FILTER) value = crtFilterMain ? "ON" : "OFF";
+            else if (i == SETTINGS_ROW_HIDE_HUD) value = hideMainHud ? "ON" : "OFF";
+            else value = null;  // SAVE STATES / REMAP BUTTONS open a sub-screen, no ON/OFF value
+
+            if (value != null) {
+                int valueColor = "ON".equals(value) ? COL_ACCENT : COL_DIM_GRAY;
+                PixelFont.drawText(canvas, value, row.right - rowH * 0.3f - PixelFont.measureWidth(value, PixelFont.pixelSizeForHeight(textSize)),
+                        row.centerY() - textSize / 2f, PixelFont.pixelSizeForHeight(textSize), valueColor, Paint.Align.LEFT);
+            } else {
+                // Chevron affordance for the two sub-screen rows.
+                float ax = row.right - rowH * 0.35f, ay = row.centerY();
+                float chevronSize = rowH * 0.16f;
+                statusPaint.setStyle(Paint.Style.STROKE);
+                statusPaint.setColor(Color.WHITE);
+                statusPaint.setStrokeWidth(rowH * 0.05f);
+                canvas.drawLine(ax - chevronSize, ay - chevronSize, ax, ay, statusPaint);
+                canvas.drawLine(ax, ay, ax - chevronSize, ay + chevronSize, statusPaint);
+            }
+        }
+    }
+
+    // Persists a toggle both to the native engine (for the ones that need a
+    // live effect this frame - CRT/HUD) and to SharedPreferences (so it
+    // survives an app restart, since the native side's own state doesn't).
+    private void settingsTap(int index) {
+        SharedPreferences.Editor editor = getContext().getSharedPreferences("secondscreen", Context.MODE_PRIVATE).edit();
+        if (index == SETTINGS_ROW_STATUS_ON_MAP) {
+            showStatusOnMap = !showStatusOnMap;
+            editor.putBoolean("showStatusOnMap", showStatusOnMap);
+        } else if (index == SETTINGS_ROW_CRT_FILTER) {
+            crtFilterMain = !crtFilterMain;
+            // TODO: GameState.setCrtFilter native method not implemented yet.
+            editor.putBoolean("crtFilterMain", crtFilterMain);
+        } else if (index == SETTINGS_ROW_HIDE_HUD) {
+            hideMainHud = !hideMainHud;
+            // TODO: GameState.setHudHidden native method not implemented yet.
+            editor.putBoolean("hideMainHud", hideMainHud);
+        } else if (index == SETTINGS_ROW_SAVE_STATES) {
+            // TODO: open Save States sub-screen
+            return;
+        } else if (index == SETTINGS_ROW_REMAP) {
+            // TODO: open Remap Buttons sub-screen
+            return;
+        }
+        editor.apply();
+    }
+
     private void drawMap(Canvas canvas, float left, float top, float right, float bottom) {
         GameState.getSamusMapTile(samusTile);
         // Sub-tile-precise position for smooth camera/marker motion -
@@ -1288,6 +1647,9 @@ public class MapStatusView extends View {
         drawPixelBox(canvas, zoomInBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
         drawPixelBox(canvas, zoomOutBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, true);
 
+        // Same accent color as the METROID wordmark/active-tab highlight,
+        // per explicit request - was plain white before.
+        zoomBtnIconPaint.setColor(COL_ACCENT);
         float half = Math.min(zoomInBtn.width(), zoomInBtn.height()) * 0.28f;
         float cx1 = zoomInBtn.centerX(), cy1 = zoomInBtn.centerY();
         canvas.drawLine(cx1 - half, cy1, cx1 + half, cy1, zoomBtnIconPaint);
