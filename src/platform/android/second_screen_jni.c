@@ -238,6 +238,18 @@ JNIEXPORT void JNICALL JFN(cycleSelectedAmmo)(JNIEnv *env, jclass clazz, jint di
   SM2_UnlockGameState();
 }
 
+JNIEXPORT jboolean JNICALL JFN(isHudHidden)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_IsHudHidden() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL JFN(setHudHidden)(JNIEnv *env, jclass clazz, jboolean hidden) {
+  (void)env; (void)clazz;
+  SM2_LockGameState();
+  SM2_SetHudHidden(hidden == JNI_TRUE);
+  SM2_UnlockGameState();
+}
+
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 64 * 8) return JNI_FALSE;

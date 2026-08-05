@@ -124,6 +124,11 @@ public class MapStatusView extends View {
     private boolean showStatusOnMap;
     private boolean crtFilterMain;
     private boolean hideMainHud;
+    // hideMainHud is loaded from SharedPreferences in the constructor, before
+    // GameState's native library is guaranteed ready to call - applied once,
+    // lazily, on the first successful onDraw pass instead (same as the
+    // isPlayingLive/nativeBroken guard already in place there).
+    private boolean hudPrefApplied = false;
     private static final String[] SETTINGS_LABELS = {
         "STATUS ON MAP", "CRT FILTER", "HIDE MAIN HUD", "SAVE STATES", "REMAP BUTTONS",
     };
@@ -625,7 +630,7 @@ public class MapStatusView extends View {
         showStatusOnMap = prefs.getBoolean("showStatusOnMap", false);
         crtFilterMain = prefs.getBoolean("crtFilterMain", false);
         hideMainHud = prefs.getBoolean("hideMainHud", false);
-        // TODO: GameState.setCrtFilter/setHudHidden native methods not implemented yet.
+        // TODO: GameState.setCrtFilter native method not implemented yet.
     }
 
     @Override
@@ -866,6 +871,10 @@ public class MapStatusView extends View {
 
         if (!nativeBroken) {
             try {
+                if (!hudPrefApplied) {
+                    GameState.setHudHidden(hideMainHud);
+                    hudPrefApplied = true;
+                }
                 drawPixelBox(canvas, panelRect, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
 
                 switch (currentTab) {
@@ -1493,7 +1502,7 @@ public class MapStatusView extends View {
             editor.putBoolean("crtFilterMain", crtFilterMain);
         } else if (index == SETTINGS_ROW_HIDE_HUD) {
             hideMainHud = !hideMainHud;
-            // TODO: GameState.setHudHidden native method not implemented yet.
+            GameState.setHudHidden(hideMainHud);
             editor.putBoolean("hideMainHud", hideMainHud);
         } else if (index == SETTINGS_ROW_SAVE_STATES) {
             // TODO: open Save States sub-screen

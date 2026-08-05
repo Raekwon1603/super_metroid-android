@@ -306,6 +306,35 @@ void dma_doHdma(Dma* dma) {
   if(hdmaHappened) dma->hdmaTimer += 16; // 18 cycles overhead, -2 for this cycle
 }
 
+// "HIDE MAIN HUD" settings toggle (second_screen.c/SM2_IsHudHidden): SM's
+// HUD tilemap lives at fixed WRAM address $7E:C608 (hud_tilemap in
+// variables.h, g_ram+0xC608), 192 bytes (96 tilemap words, includes the
+// minimap - UpdateMinimapInside in sm_90.c writes hud_tilemap[26..30],
+// [58..62], [90..94] directly) - queued for a DMA upload to VRAM every
+// frame by HandleHudTilemap (sm_80.c). That queue gets drained by real ROM
+// machine code under RM_THEIRS (Android's forced run mode - see
+// sm_cpu_infra.c), NOT the decompiled NMI_ProcessVramWriteQueue C function,
+// so hooking this at the WRAM DMA-source-address level (instead of in the
+// decompiled queue-processing code, which never runs on Android) is what
+// actually works regardless of run mode: it's the one thing that's true
+// both for the decompile and the byte-accurate CPU-emulated ROM path.
+extern bool g_hud_hidden;
+extern uint16_t g_hud_tilemap_vram_dst;
+#define kHudTilemapWramAddr 0xC608
+#define kHudTilemapWramSize 192
+// Static minimap border/frame graphic: InitializeHud (sm_80.c) DMAs this
+// directly from ROM ($80:988B, 64 bytes) to a FIXED VRAM address (0x5800,
+// addr_unk_605800) once per room/game entry - separate from hud_tilemap
+// entirely (source is ROM, not WRAM, and it only runs once, not every
+// frame), so it needs its own filter here. Both the source and destination
+// are fixed literals in the original code (not derived at runtime like
+// hud_tilemap's own VRAM destination can vary), so no runtime discovery
+// needed for this one.
+#define kHudMinimapBorderRomBank 0x80
+#define kHudMinimapBorderRomAddr 0x988b
+#define kHudMinimapBorderRomSize 0x40
+#define kHudMinimapBorderVramDst 0x5800
+
 static void dma_transferByte(Dma* dma, uint16_t aAdr, uint8_t aBank, uint8_t bAdr, bool fromB) {
   // TODO: invalid writes:
   //   accesing b-bus via a-bus gives open bus,
@@ -314,7 +343,29 @@ static void dma_transferByte(Dma* dma, uint16_t aAdr, uint8_t aBank, uint8_t bAd
   if(fromB) {
     snes_write(dma->snes, (aBank << 16) | aAdr, snes_readBBus(dma->snes, bAdr));
   } else {
-    snes_writeBBus(dma->snes, bAdr, snes_read(dma->snes, (aBank << 16) | aAdr));
+    uint8_t val = snes_read(dma->snes, (aBank << 16) | aAdr);
+    bool isHudTilemap = aBank == 0x7E && aAdr >= kHudTilemapWramAddr
+        && aAdr < kHudTilemapWramAddr + kHudTilemapWramSize;
+    bool isMinimapBorder = aBank == kHudMinimapBorderRomBank
+        && aAdr >= kHudMinimapBorderRomAddr
+        && aAdr < kHudMinimapBorderRomAddr + kHudMinimapBorderRomSize;
+    if (isHudTilemap) {
+      // Latch this transfer's VRAM destination (dma->snes->ppu->vramPointer,
+      // pre-increment - the byte about to be written lands there) so
+      // SM2_SetHudHidden can force-blank whatever's already in VRAM the
+      // moment the toggle flips on, not just gate future writes - see that
+      // function's own comment.
+      g_hud_tilemap_vram_dst = dma->snes->ppu->vramPointer & 0x7ffe;
+    }
+    if (g_hud_hidden && isHudTilemap) {
+      // Blank tile 0x2c0f (same backdrop tile HandleHudTilemap's own
+      // kHudTilemaps_Row1to3 fills every empty HUD position with) -
+      // low byte first, matching the tilemap's little-endian word layout.
+      val = ((aAdr - kHudTilemapWramAddr) & 1) ? 0x2c : 0x0f;
+    } else if (g_hud_hidden && isMinimapBorder) {
+      val = ((aAdr - kHudMinimapBorderRomAddr) & 1) ? 0x2c : 0x0f;
+    }
+    snes_writeBBus(dma->snes, bAdr, val);
   }
 }
 

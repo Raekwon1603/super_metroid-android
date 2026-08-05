@@ -5,6 +5,7 @@
 #include "sm_rtl.h"
 #include "funcs.h"
 #include "redux_suit_data.h"
+#include "sm_cpu_infra.h"
 #ifdef __ANDROID__
 #include <android/log.h>
 #endif
@@ -686,6 +687,43 @@ void SM2_CycleSelectedAmmo(int direction) {
       hud_auto_cancel_flag = 0;
       return;
     }
+  }
+}
+
+// ---- main-screen HUD visibility ----
+// Not static: read directly by src/snes/dma.c's dma_transferByte, the hook
+// point that actually works under RM_THEIRS (Android's forced run mode) -
+// see that file's own comment on why the decompiled NMI_ProcessVramWriteQueue
+// hook (sm_80.c) doesn't run there.
+bool g_hud_hidden = false;
+
+bool SM2_IsHudHidden(void) { return g_hud_hidden; }
+
+// Set by dma.c's dma_transferByte the first time it sees hud_tilemap's own
+// DMA entry go by (its vram_dst is stable across frames - same BG3 tilemap
+// base for as long as the current room's HUD is up), so this file can also
+// force-blank whatever's already sitting in VRAM the moment the toggle
+// flips on, not just gate future per-frame writes. Without this, a mostly-
+// static element that reads hud_tilemap only once in a while - the minimap
+// border/box, written by UpdateMinimapInside (sm_90.c) directly into
+// hud_tilemap[26..30]/[58..62]/[90..94] - could sit there stale and visible
+// for a long time after HIDE MAIN HUD is switched on mid-room, since
+// nothing re-uploads it until something actually changes on the minimap.
+uint16 g_hud_tilemap_vram_dst = 0xffff;
+
+void SM2_SetHudHidden(bool hidden) {
+  g_hud_hidden = hidden;
+  if (!hidden || !g_snes || !g_snes->ppu) return;
+  if (g_hud_tilemap_vram_dst != 0xffff) {
+    for (int w = 0; w < 96; w++) {
+      g_snes->ppu->vram[(g_hud_tilemap_vram_dst + w) & 0x7fff] = 0x2c0f;
+    }
+  }
+  // Static minimap border/frame graphic (InitializeHud, sm_80.c) - fixed
+  // VRAM destination (0x5800), unlike hud_tilemap's own dest which has to
+  // be discovered at runtime - see dma.c's own comment on this region.
+  for (int w = 0; w < 0x40 / 2; w++) {
+    g_snes->ppu->vram[(0x5800 + w) & 0x7fff] = 0x2c0f;
   }
 }
 

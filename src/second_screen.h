@@ -217,6 +217,19 @@ void SM2_SetSelectedAmmo(int index);
 // screen's AMMO tab.
 void SM2_CycleSelectedAmmo(int direction);
 
+// ---- main-screen HUD visibility ----
+// When set, NMI_ProcessVramWriteQueue (sm_80.c) skips the DMA transfer that
+// uploads hud_tilemap (g_ram+0xC608) to VRAM and instead blanks that same
+// VRAM region with tile 0x2000 (blank tile, palette group 0) - so the main
+// screen's status bar (energy/ammo/reserve tanks) disappears without
+// touching any other HUD elements (item boxes, etc. live in different
+// tilemap regions/entries not affected by this). A plain bool is safe to
+// set from the JNI thread and read from the game thread, same reasoning as
+// SM2_SetSelectedAmmo's own comment: the game thread re-checks it every NMI
+// rather than caching it.
+bool SM2_IsHudHidden(void);
+void SM2_SetHudHidden(bool hidden);
+
 // ---- real room background art ----
 // Max room-art render buffer dimensions - a handful of SM's largest rooms
 // (tall elevator/water shafts) exceed this and get clipped rather than

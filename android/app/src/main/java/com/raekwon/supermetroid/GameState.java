@@ -120,6 +120,11 @@ public class GameState {
     // button range).
     public static native void cycleSelectedAmmo(int direction);
 
+    // Hides/shows the main screen's status bar (energy/reserve/ammo
+    // readout) - SETTINGS tab's "HIDE MAIN HUD" toggle.
+    public static native boolean isHudHidden();
+    public static native void setHudHidden(boolean hidden);
+
     // Real room background art - the actual walls/floor/decoration tiles
     // the game draws during live gameplay, NOT the schematic pause-map
     // rectangles renderAreaMap produces. out must be length >=
