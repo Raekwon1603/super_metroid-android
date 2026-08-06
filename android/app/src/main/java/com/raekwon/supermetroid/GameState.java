@@ -125,6 +125,22 @@ public class GameState {
     public static native boolean isHudHidden();
     public static native void setHudHidden(boolean hidden);
 
+    // Save States - SETTINGS tab's "SAVE STATES" sub-screen. 4 slots
+    // (0-3), stored separately from the desktop's own F1-F10 quicksave
+    // slots (native side offsets these by 100 - see second_screen.h).
+    public static final int STATE_SLOTS = 4;
+    public static native boolean saveState(int slot);
+    public static native boolean loadState(int slot);
+    public static native boolean stateSlotExists(int slot);
+    // Downsamples the most recently rendered main-screen frame into a
+    // THUMB_W x THUMB_H ARGB8888 buffer (out must be length >=
+    // THUMB_W*THUMB_H) - call right after a successful saveState() so the
+    // thumbnail matches what was actually saved. 8:7 aspect ratio (the
+    // SNES's own 256x224 pixel ratio), so it isn't stretched.
+    public static final int THUMB_W = 128;
+    public static final int THUMB_H = 112;
+    public static native boolean captureStateThumbnail(int[] out, int thumbW, int thumbH);
+
     // Real room background art - the actual walls/floor/decoration tiles
     // the game draws during live gameplay, NOT the schematic pause-map
     // rectangles renderAreaMap produces. out must be length >=

@@ -140,6 +140,33 @@ public class MapStatusView extends View {
     private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF(), new RectF() };
     private int settingsTouchDownIndex = -1;
 
+    // Save States sub-screen (SETTINGS tab's "SAVE STATES" row) - null
+    // means the main SETTINGS list is showing; non-null names which
+    // sub-screen is showing instead (only one exists so far).
+    private enum SettingsSubPanel { SAVE_STATES }
+    private SettingsSubPanel settingsSubPanel = null;
+    private final RectF settingsBackButtonRect = new RectF();
+    private int settingsBackTouchDownId = -1;
+    private static final int STATE_SLOTS = GameState.STATE_SLOTS;
+    private final RectF[] stateSlotRects = new RectF[STATE_SLOTS];
+    private final RectF[] stateSaveButtonRects = new RectF[STATE_SLOTS];
+    private final RectF[] stateLoadButtonRects = new RectF[STATE_SLOTS];
+    private int stateSlotTouchDownIndex = -1;
+    private int stateSlotTouchDownButton = -1;  // 0=save, 1=load
+    // Cached per-slot thumbnails - re-decoded from GameState only when a
+    // save just happened (captureStateThumbnail is a real downsample pass
+    // over the last-rendered frame, not free enough to call every onDraw).
+    private final Bitmap[] stateSlotThumbnails = new Bitmap[STATE_SLOTS];
+    private final int[] stateThumbPixels = new int[GameState.THUMB_W * GameState.THUMB_H];
+    // Flashes a brief confirmation label ("SAVED"/"LOADED") over a slot
+    // after tapping its button, since there's no other feedback that the
+    // tap actually did something (same UX gap PixelFont.drawText-based
+    // toggles elsewhere in this file don't have, because those show an
+    // immediate ON/OFF value change instead).
+    private int stateSlotFlashIndex = -1;
+    private String stateSlotFlashText = null;
+    private long stateSlotFlashUntilMs = 0;
+
     // Zoomed all the way out: all 6 named areas composited into one shared
     // canvas at their real relative positions - a single connected map, not
     // a grid of separate panels. Area indices per SM's own area_index
@@ -524,6 +551,12 @@ public class MapStatusView extends View {
     public MapStatusView(Context context) {
         super(context);
 
+        for (int i = 0; i < STATE_SLOTS; i++) {
+            stateSlotRects[i] = new RectF();
+            stateSaveButtonRects[i] = new RectF();
+            stateLoadButtonRects[i] = new RectF();
+        }
+
         scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
@@ -705,7 +738,25 @@ public class MapStatusView extends View {
                 }
             }
 
-            if (currentTab == Tab.SETTINGS) {
+            if (currentTab == Tab.SETTINGS && settingsSubPanel == SettingsSubPanel.SAVE_STATES) {
+                if (settingsBackButtonRect.contains(x, y)) {
+                    settingsBackTouchDownId = event.getPointerId(0);
+                    return true;
+                }
+                for (int i = 0; i < STATE_SLOTS; i++) {
+                    if (stateSaveButtonRects[i].contains(x, y)) {
+                        stateSlotTouchDownIndex = i;
+                        stateSlotTouchDownButton = 0;
+                        return true;
+                    }
+                    if (stateLoadButtonRects[i].contains(x, y)) {
+                        stateSlotTouchDownIndex = i;
+                        stateSlotTouchDownButton = 1;
+                        return true;
+                    }
+                }
+                return true;
+            } else if (currentTab == Tab.SETTINGS) {
                 for (int i = 0; i < settingsRowRects.length; i++) {
                     if (settingsRowRects[i].contains(x, y)) {
                         settingsTouchDownIndex = i;
@@ -788,6 +839,30 @@ public class MapStatusView extends View {
             }
             ammoTouchPointerId = -1;
             return true;
+        } else if (action == MotionEvent.ACTION_UP && settingsBackTouchDownId != -1) {
+            if (settingsBackButtonRect.contains(event.getX(), event.getY())) {
+                settingsSubPanel = null;
+            }
+            settingsBackTouchDownId = -1;
+            return true;
+        } else if (action == MotionEvent.ACTION_UP && stateSlotTouchDownIndex != -1) {
+            int slot = stateSlotTouchDownIndex, btn = stateSlotTouchDownButton;
+            RectF target = btn == 0 ? stateSaveButtonRects[slot] : stateLoadButtonRects[slot];
+            if (target.contains(event.getX(), event.getY())) {
+                if (btn == 0) {
+                    if (GameState.saveState(slot)) {
+                        captureAndCacheThumbnail(slot);
+                        flashSlotMessage(slot, "SAVED");
+                    }
+                } else if (GameState.stateSlotExists(slot)) {
+                    if (GameState.loadState(slot)) {
+                        flashSlotMessage(slot, "LOADED");
+                    }
+                }
+            }
+            stateSlotTouchDownIndex = -1;
+            stateSlotTouchDownButton = -1;
+            return true;
         } else if (action == MotionEvent.ACTION_UP && settingsTouchDownIndex != -1) {
             int idx = settingsTouchDownIndex;
             if (idx >= 0 && idx < settingsRowRects.length && settingsRowRects[idx].contains(event.getX(), event.getY())) {
@@ -854,6 +929,9 @@ public class MapStatusView extends View {
             roomWorldToggleBtnPointerId = -1;
             statusStripTouchPointerId = -1;
             settingsTouchDownIndex = -1;
+            settingsBackTouchDownId = -1;
+            stateSlotTouchDownIndex = -1;
+            stateSlotTouchDownButton = -1;
         }
 
         if (currentTab == Tab.MAP && zoomButtonPointerId == -1 && statusStripTouchPointerId == -1
@@ -1447,6 +1525,11 @@ public class MapStatusView extends View {
     // version this is scoped down from - most of its rows are Zelda-
     // specific mechanics that don't apply here).
     private void drawSettingsTab(Canvas canvas) {
+        if (settingsSubPanel == SettingsSubPanel.SAVE_STATES) {
+            drawSaveStatesPanel(canvas);
+            return;
+        }
+
         float pad = panelRect.width() * 0.04f;
         float left = panelRect.left + pad, right = panelRect.right - pad;
         float top = panelRect.top + pad;
@@ -1488,6 +1571,108 @@ public class MapStatusView extends View {
         }
     }
 
+    // Re-decodes every existing slot's on-disk thumbnail into a Bitmap -
+    // called once when entering the sub-panel (stateSlotExists/
+    // captureStateThumbnail aren't cheap enough to call every onDraw) and
+    // again after any save/load that could have changed what's on disk.
+    // There's no separate thumbnail file - GameState.captureStateThumbnail
+    // only ever reflects the CURRENTLY RUNNING frame, so a slot that exists
+    // on disk but wasn't just saved/loaded this session has no thumbnail
+    // available and just shows a plain placeholder instead (see
+    // drawSaveStatesPanel's own null check).
+    private void refreshStateSlotThumbnails() {
+        for (int i = 0; i < STATE_SLOTS; i++) {
+            if (!GameState.stateSlotExists(i)) stateSlotThumbnails[i] = null;
+        }
+    }
+
+    private void captureAndCacheThumbnail(int slot) {
+        if (!GameState.captureStateThumbnail(stateThumbPixels, GameState.THUMB_W, GameState.THUMB_H)) return;
+        if (stateSlotThumbnails[slot] == null) {
+            stateSlotThumbnails[slot] = Bitmap.createBitmap(GameState.THUMB_W, GameState.THUMB_H, Bitmap.Config.ARGB_8888);
+        }
+        stateSlotThumbnails[slot].setPixels(stateThumbPixels, 0, GameState.THUMB_W, 0, 0, GameState.THUMB_W, GameState.THUMB_H);
+    }
+
+    private void flashSlotMessage(int slot, String text) {
+        stateSlotFlashIndex = slot;
+        stateSlotFlashText = text;
+        stateSlotFlashUntilMs = System.currentTimeMillis() + 1200;
+    }
+
+    private void drawSaveStatesPanel(Canvas canvas) {
+        float pad = panelRect.width() * 0.04f;
+        float left = panelRect.left + pad, right = panelRect.right - pad;
+        float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
+
+        float backH = panelRect.height() * 0.09f;
+        settingsBackButtonRect.set(left, top, left + panelRect.width() * 0.24f, top + backH);
+        drawPixelBox(canvas, settingsBackButtonRect, COL_SLOT_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+        float backTextSize = backH * 0.4f;
+        PixelFont.drawText(canvas, "< BACK", settingsBackButtonRect.centerX(), settingsBackButtonRect.centerY() - backTextSize / 2f,
+                PixelFont.pixelSizeForHeight(backTextSize), COL_TAB_LABEL, Paint.Align.CENTER);
+
+        float listTop = settingsBackButtonRect.bottom + panelRect.height() * 0.03f;
+        float rowH = (bottom - listTop - (STATE_SLOTS - 1) * panelRect.height() * 0.025f) / STATE_SLOTS;
+        float gap = panelRect.height() * 0.025f;
+
+        boolean flashActive = stateSlotFlashIndex >= 0 && System.currentTimeMillis() < stateSlotFlashUntilMs;
+        if (!flashActive) stateSlotFlashIndex = -1;
+
+        for (int i = 0; i < STATE_SLOTS; i++) {
+            float ry0 = listTop + i * (rowH + gap);
+            RectF row = stateSlotRects[i];
+            row.set(left, ry0, right, ry0 + rowH);
+            drawPixelBox(canvas, row, COL_SLOT_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+
+            float thumbW = rowH * (GameState.THUMB_W / (float) GameState.THUMB_H);
+            RectF thumbRect = new RectF(row.left + rowH * 0.12f, row.top + rowH * 0.12f,
+                    row.left + rowH * 0.12f + thumbW, row.bottom - rowH * 0.12f);
+            if (stateSlotThumbnails[i] != null) {
+                canvas.drawBitmap(stateSlotThumbnails[i], null, thumbRect, mapPaint);
+                statusPaint.setStyle(Paint.Style.STROKE);
+                statusPaint.setColor(COL_BORDER_DARK);
+                statusPaint.setStrokeWidth(rowH * 0.02f);
+                canvas.drawRect(thumbRect, statusPaint);
+            } else {
+                statusPaint.setStyle(Paint.Style.FILL);
+                statusPaint.setColor(Color.rgb(22, 24, 34));
+                canvas.drawRect(thumbRect, statusPaint);
+                boolean exists = GameState.stateSlotExists(i);
+                String placeholder = exists ? "SAVED" : "EMPTY";
+                PixelFont.drawText(canvas, placeholder, thumbRect.centerX(), thumbRect.centerY() - rowH * 0.05f,
+                        PixelFont.pixelSizeForHeight(rowH * 0.1f), COL_DIM_GRAY, Paint.Align.CENTER);
+            }
+
+            float labelSize = rowH * 0.22f;
+            PixelFont.drawText(canvas, "SLOT " + (i + 1), thumbRect.right + rowH * 0.15f, row.top + rowH * 0.2f,
+                    PixelFont.pixelSizeForHeight(labelSize), COL_TAB_LABEL, Paint.Align.LEFT);
+
+            if (flashActive && stateSlotFlashIndex == i) {
+                PixelFont.drawText(canvas, stateSlotFlashText, thumbRect.right + rowH * 0.15f, row.top + rowH * 0.48f,
+                        PixelFont.pixelSizeForHeight(labelSize), COL_ACCENT, Paint.Align.LEFT);
+            }
+
+            float btnW = (right - (thumbRect.right + rowH * 0.15f) - rowH * 0.15f) / 2f - rowH * 0.1f;
+            float btnH = rowH * 0.32f;
+            float btnY = row.bottom - rowH * 0.15f - btnH;
+            float btnX0 = thumbRect.right + rowH * 0.15f;
+
+            RectF saveBtn = stateSaveButtonRects[i];
+            saveBtn.set(btnX0, btnY, btnX0 + btnW, btnY + btnH);
+            drawPixelBox(canvas, saveBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+            PixelFont.drawText(canvas, "SAVE", saveBtn.centerX(), saveBtn.centerY() - labelSize * 0.4f,
+                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), COL_TAB_LABEL, Paint.Align.CENTER);
+
+            RectF loadBtn = stateLoadButtonRects[i];
+            boolean canLoad = GameState.stateSlotExists(i);
+            loadBtn.set(btnX0 + btnW + rowH * 0.1f, btnY, btnX0 + btnW * 2 + rowH * 0.1f, btnY + btnH);
+            drawPixelBox(canvas, loadBtn, COL_PANEL_BG, canLoad ? COL_BORDER_DARK : Color.rgb(30, 30, 30), COL_BORDER_HIGHLIGHT, false);
+            PixelFont.drawText(canvas, "LOAD", loadBtn.centerX(), loadBtn.centerY() - labelSize * 0.4f,
+                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), canLoad ? COL_TAB_LABEL : COL_DIM_GRAY, Paint.Align.CENTER);
+        }
+    }
+
     // Persists a toggle both to the native engine (for the ones that need a
     // live effect this frame - CRT/HUD) and to SharedPreferences (so it
     // survives an app restart, since the native side's own state doesn't).
@@ -1505,7 +1690,8 @@ public class MapStatusView extends View {
             GameState.setHudHidden(hideMainHud);
             editor.putBoolean("hideMainHud", hideMainHud);
         } else if (index == SETTINGS_ROW_SAVE_STATES) {
-            // TODO: open Save States sub-screen
+            settingsSubPanel = SettingsSubPanel.SAVE_STATES;
+            refreshStateSlotThumbnails();
             return;
         } else if (index == SETTINGS_ROW_REMAP) {
             // TODO: open Remap Buttons sub-screen

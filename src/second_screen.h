@@ -230,6 +230,30 @@ void SM2_CycleSelectedAmmo(int direction);
 bool SM2_IsHudHidden(void);
 void SM2_SetHudHidden(bool hidden);
 
+// ---- save states ----
+// Slots 0-3 (SM2_STATE_SLOTS), separate from the desktop F1-F10 quicksave
+// keys' own slot numbering (RtlSaveLoad in sm_rtl.c, "saves/save<N>.sav") -
+// these use slots 100+N so the two schemes can never collide on the same
+// file. Wraps RtlSaveLoad with SM2_LockGameState/UnlockGameState so it's
+// safe to call directly from the JNI/UI thread (same reasoning as every
+// other SM2_* function that touches g_ram - see this header's own top
+// comment) - no pending-flag/game-thread-consumed indirection needed since
+// RtlSaveLoad itself is just file I/O plus a RAM-state copy, not something
+// that needs to run at a specific point in the frame.
+enum { SM2_STATE_SLOTS = 4, SM2_STATE_SLOT_BASE = 100 };
+bool SM2_SaveState(int slot);
+bool SM2_LoadState(int slot);
+// True if saves/save<100+slot>.sav exists on disk.
+bool SM2_StateSlotExists(int slot);
+
+// Downsamples the most recently rendered main-screen frame (256x224, the
+// same pixels RtlDrawPpuFrame last drew) into a thumbW x thumbH ARGB8888
+// buffer via simple box-filter averaging - out must be length >=
+// thumbW*thumbH. Called right after SM2_SaveState succeeds so the
+// thumbnail matches what was actually saved. Implemented in main.c (the
+// only file with direct access to the raw g_pixels framebuffer).
+bool SM2_CaptureThumbnail(uint32 *out, int thumbW, int thumbH);
+
 // ---- real room background art ----
 // Max room-art render buffer dimensions - a handful of SM's largest rooms
 // (tall elevator/water shafts) exceed this and get clipped rather than

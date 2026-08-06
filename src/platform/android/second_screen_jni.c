@@ -250,6 +250,35 @@ JNIEXPORT void JNICALL JFN(setHudHidden)(JNIEnv *env, jclass clazz, jboolean hid
   SM2_UnlockGameState();
 }
 
+JNIEXPORT jboolean JNICALL JFN(saveState)(JNIEnv *env, jclass clazz, jint slot) {
+  (void)env; (void)clazz;
+  return SM2_SaveState(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(loadState)(JNIEnv *env, jclass clazz, jint slot) {
+  (void)env; (void)clazz;
+  return SM2_LoadState(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(stateSlotExists)(JNIEnv *env, jclass clazz, jint slot) {
+  (void)env; (void)clazz;
+  return SM2_StateSlotExists(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+// 128x112 - matches GameState.java's THUMB_W/THUMB_H (8:7, the SNES's own
+// aspect ratio, so the thumbnail isn't stretched). Static scratch buffer,
+// same reasoning as g_map_px above.
+static uint32 g_thumb_px[128 * 112];
+
+JNIEXPORT jboolean JNICALL JFN(captureStateThumbnail)(JNIEnv *env, jclass clazz, jintArray out, jint thumbW, jint thumbH) {
+  (void)clazz;
+  if (!out || thumbW <= 0 || thumbH <= 0 || (size_t)(thumbW * thumbH) > countof(g_thumb_px)) return JNI_FALSE;
+  if ((*env)->GetArrayLength(env, out) < thumbW * thumbH) return JNI_FALSE;
+  if (!SM2_CaptureThumbnail(g_thumb_px, thumbW, thumbH)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, thumbW * thumbH, (jint *)g_thumb_px);
+  return JNI_TRUE;
+}
+
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 64 * 8) return JNI_FALSE;

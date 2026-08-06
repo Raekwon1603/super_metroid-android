@@ -727,6 +727,32 @@ void SM2_SetHudHidden(bool hidden) {
   }
 }
 
+bool SM2_SaveState(int slot) {
+  if (slot < 0 || slot >= SM2_STATE_SLOTS) return false;
+  SM2_LockGameState();
+  RtlSaveLoad(kSaveLoad_Save, SM2_STATE_SLOT_BASE + slot);
+  SM2_UnlockGameState();
+  return true;
+}
+
+bool SM2_LoadState(int slot) {
+  if (slot < 0 || slot >= SM2_STATE_SLOTS || !SM2_StateSlotExists(slot)) return false;
+  SM2_LockGameState();
+  RtlSaveLoad(kSaveLoad_Load, SM2_STATE_SLOT_BASE + slot);
+  SM2_UnlockGameState();
+  return true;
+}
+
+bool SM2_StateSlotExists(int slot) {
+  if (slot < 0 || slot >= SM2_STATE_SLOTS) return false;
+  char path[64];
+  snprintf(path, sizeof(path), "saves/save%d.sav", SM2_STATE_SLOT_BASE + slot);
+  FILE *f = fopen(path, "rb");
+  if (!f) return false;
+  fclose(f);
+  return true;
+}
+
 // ---- Real room background art (not the schematic pause-map tiles above) ----
 //
 // Renders the CURRENT room's actual BG1 tilemap, exactly as the real game

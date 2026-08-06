@@ -172,6 +172,38 @@ void RtlDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
     memcpy((uint8_t *)pixel_buffer + y * pitch, ppu_pixels + y * 256 * 4, 256 * 4);
 }
 
+// Save States thumbnails - box-filter downsample of the most recently
+// rendered main-screen frame (g_pixels, 256x224 visible area out of the
+// 256x240 buffer - the bottom 16 rows are the usually-invisible overscan
+// strip, same reasoning DrawPpuFrameWithPerf's own 240-row copy already
+// accepts). Byte order in g_pixels is BGRA (see ppu_handlePixel's own
+// pixelBuffer[0]=b,[1]=g,[2]=r,[3]=0 writes) - out is packed 0xAARRGGBB
+// (Android Bitmap.Config.ARGB_8888 int[] convention) so the channels are
+// reordered here rather than left for the Java side to puzzle out.
+bool SM2_CaptureThumbnail(uint32 *out, int thumbW, int thumbH) {
+  if (!out || thumbW <= 0 || thumbH <= 0) return false;
+  const int srcW = 256, srcH = 224;
+  for (int ty = 0; ty < thumbH; ty++) {
+    int sy0 = ty * srcH / thumbH, sy1 = (ty + 1) * srcH / thumbH;
+    if (sy1 <= sy0) sy1 = sy0 + 1;
+    for (int tx = 0; tx < thumbW; tx++) {
+      int sx0 = tx * srcW / thumbW, sx1 = (tx + 1) * srcW / thumbW;
+      if (sx1 <= sx0) sx1 = sx0 + 1;
+      uint32 r = 0, g = 0, b = 0, n = 0;
+      for (int sy = sy0; sy < sy1; sy++) {
+        const uint8 *row = g_pixels + sy * 256 * 4;
+        for (int sx = sx0; sx < sx1; sx++) {
+          const uint8 *px = row + sx * 4;
+          b += px[0]; g += px[1]; r += px[2];
+          n++;
+        }
+      }
+      out[ty * thumbW + tx] = 0xff000000u | ((r / n) << 16) | ((g / n) << 8) | (b / n);
+    }
+  }
+  return true;
+}
+
 static void DrawPpuFrameWithPerf(void) {
   int render_scale = PpuGetCurrentRenderScale(g_snes->ppu, g_ppu_render_flags);
   uint8 *pixel_buffer = 0;
