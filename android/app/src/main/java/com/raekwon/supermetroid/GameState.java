@@ -138,6 +138,19 @@ public class GameState {
     // SM2_SetAutosaveOnExit's own comment in second_screen.c).
     public static native boolean isAutosaveOnExit();
     public static native void setAutosaveOnExit(boolean enabled);
+    // Reads the thumbnail captured natively right after the autosave-on-exit
+    // save (see SM2_CaptureAutosaveThumbnail's own comment) - out must be
+    // THUMB_W*THUMB_H (128*112). False if autosave has never run this
+    // install. Separate from the manual slots' own captureStateThumbnail,
+    // which only ever reflects the CURRENTLY RUNNING frame and can't
+    // retroactively show what a PAST session's autosave looked like.
+    public static native boolean readAutosaveThumbnail(int[] out);
+    // True if saves/save0.sav (the desktop quicksave slot autosave-on-exit
+    // writes to) exists on disk.
+    public static native boolean autosaveExists();
+    // Loads saves/save0.sav directly - same real effect as the app's own
+    // startup autosave-load, just callable on demand.
+    public static native boolean loadAutosave();
 
     // Save States - SETTINGS tab's "SAVE STATES" sub-screen. 4 slots
     // (0-3), stored separately from the desktop's own F1-F10 quicksave

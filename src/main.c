@@ -635,8 +635,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (g_config.autosave)
+  if (g_config.autosave) {
     HandleCommand(kKeys_Save + 0, true);
+    SM2_CaptureAutosaveThumbnail();
+  }
 
   // clean sdl
   SDL_PauseAudioDevice(g_audio_device, 1);

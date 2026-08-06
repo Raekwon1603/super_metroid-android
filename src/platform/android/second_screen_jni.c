@@ -309,6 +309,24 @@ JNIEXPORT jboolean JNICALL JFN(captureStateThumbnail)(JNIEnv *env, jclass clazz,
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(readAutosaveThumbnail)(JNIEnv *env, jclass clazz, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 128 * 112) return JNI_FALSE;
+  if (!SM2_ReadAutosaveThumbnail(g_thumb_px)) return JNI_FALSE;
+  (*env)->SetIntArrayRegion(env, out, 0, 128 * 112, (jint *)g_thumb_px);
+  return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(autosaveExists)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_AutosaveExists() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL JFN(loadAutosave)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_LoadAutosave() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL JFN(renderItemIcon)(JNIEnv *env, jclass clazz, jint bit, jintArray out) {
   (void)clazz;
   if (!out || (*env)->GetArrayLength(env, out) < 64 * 8) return JNI_FALSE;

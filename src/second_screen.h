@@ -249,6 +249,24 @@ void SM2_SetHudHidden(bool hidden);
 // comment in second_screen.c for why).
 bool SM2_IsAutosaveOnExit(void);
 void SM2_SetAutosaveOnExit(bool enabled);
+// Called once, natively, right after the autosave-on-exit save itself (see
+// this function's only call site in main.c's shutdown path) - captures a
+// thumbnail of the frame that was just saved into its own small raw-pixel
+// file (saves/autosave_thumb.bin), since by the time the app could hand
+// control back to Java to do this the normal way (like the manual slots'
+// own captureStateThumbnail call), the process may already be exiting.
+void SM2_CaptureAutosaveThumbnail(void);
+// Reads that file back - out must be 128*112 (kAutosaveThumbW*H) uint32s,
+// ARGB8888. Returns false if autosave has never run this install, or the
+// file is stale/wrong-sized.
+bool SM2_ReadAutosaveThumbnail(uint32 *out);
+// True if saves/save0.sav (the desktop quicksave slot autosave-on-exit
+// uses) exists on disk.
+bool SM2_AutosaveExists(void);
+// Loads saves/save0.sav directly - same real effect as the app's own
+// startup autosave-load, just callable on demand instead of only at
+// launch. Returns false (no-op) if SM2_AutosaveExists() is false.
+bool SM2_LoadAutosave(void);
 
 // ---- save states ----
 // Slots 0-3 (SM2_STATE_SLOTS), separate from the desktop F1-F10 quicksave

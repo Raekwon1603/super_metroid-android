@@ -189,6 +189,21 @@ public class MapStatusView extends View {
     private String stateSlotFlashText = null;
     private long stateSlotFlashUntilMs = 0;
 
+    // Autosave-on-exit row (SAVE STATES panel, below the 4 manual slots) -
+    // read-only (no SAVE/DELETE button, only LOAD): the underlying save
+    // file and its thumbnail are both written natively, once, right before
+    // the process exits (see SM2_CaptureAutosaveThumbnail's own comment in
+    // second_screen.c) - there's no "tap SAVE" moment for this row to
+    // trigger from the UI thread the way the 4 manual slots have.
+    private final RectF autosaveRowRect = new RectF();
+    private final RectF autosaveLoadButtonRect = new RectF();
+    private int autosaveTouchDownId = -1;
+    private Bitmap autosaveThumbnail;
+    private final int[] autosaveThumbPixels = new int[GameState.THUMB_W * GameState.THUMB_H];
+    private boolean autosaveThumbLoadAttempted = false;
+    private boolean autosaveLoadFlash = false;
+    private long autosaveLoadFlashUntilMs = 0;
+
     // Zoomed all the way out: all 6 named areas composited into one shared
     // canvas at their real relative positions - a single connected map, not
     // a grid of separate panels. Area indices per SM's own area_index
@@ -925,6 +940,10 @@ public class MapStatusView extends View {
                         return true;
                     }
                 }
+                if (autosaveLoadButtonRect.contains(x, y)) {
+                    autosaveTouchDownId = event.getPointerId(0);
+                    return true;
+                }
                 return true;
             } else if (currentTab == Tab.SETTINGS) {
                 for (int i = 0; i < settingsRowRects.length; i++) {
@@ -1021,6 +1040,15 @@ public class MapStatusView extends View {
             stateSlotTouchDownIndex = -1;
             stateSlotTouchDownButton = -1;
             return true;
+        } else if (action == MotionEvent.ACTION_UP && autosaveTouchDownId != -1) {
+            if (autosaveLoadButtonRect.contains(event.getX(), event.getY()) && GameState.autosaveExists()) {
+                if (GameState.loadAutosave()) {
+                    autosaveLoadFlash = true;
+                    autosaveLoadFlashUntilMs = System.currentTimeMillis() + 1200;
+                }
+            }
+            autosaveTouchDownId = -1;
+            return true;
         } else if (action == MotionEvent.ACTION_UP && settingsTouchDownIndex != -1) {
             int idx = settingsTouchDownIndex;
             if (idx >= 0 && idx < settingsRowRects.length && settingsRowRects[idx].contains(event.getX(), event.getY())) {
@@ -1077,6 +1105,7 @@ public class MapStatusView extends View {
             settingsBackTouchDownId = -1;
             stateSlotTouchDownIndex = -1;
             stateSlotTouchDownButton = -1;
+            autosaveTouchDownId = -1;
         }
 
         if (currentTab == Tab.MAP && zoomButtonPointerId == -1 && statusStripTouchPointerId == -1
@@ -1732,6 +1761,23 @@ public class MapStatusView extends View {
                 if (loaded != null) stateSlotThumbnails[i] = loaded;
             }
         }
+        refreshAutosaveThumbnail();
+    }
+
+    // Reads the autosave thumbnail (native raw-pixel file, not a PNG - see
+    // GameState.readAutosaveThumbnail's own comment) once per app launch.
+    // Unlike the 4 manual slots, this file can only ever change at process
+    // exit (the native autosave-on-exit write), so there's no way for it to
+    // go stale WHILE this screen is open this session - a single load
+    // attempt the first time the panel is shown is enough, rather than
+    // re-checking every time like the manual slots do (those can change
+    // mid-session via their own SAVE/DELETE buttons).
+    private void refreshAutosaveThumbnail() {
+        if (autosaveThumbLoadAttempted) return;
+        autosaveThumbLoadAttempted = true;
+        if (!GameState.readAutosaveThumbnail(autosaveThumbPixels)) return;
+        autosaveThumbnail = Bitmap.createBitmap(GameState.THUMB_W, GameState.THUMB_H, Bitmap.Config.ARGB_8888);
+        autosaveThumbnail.setPixels(autosaveThumbPixels, 0, GameState.THUMB_W, 0, 0, GameState.THUMB_W, GameState.THUMB_H);
     }
 
     private void captureAndCacheThumbnail(int slot) {
@@ -1783,8 +1829,19 @@ public class MapStatusView extends View {
                 PixelFont.pixelSizeForHeight(backTextSize), COL_TAB_LABEL, Paint.Align.CENTER);
 
         float listTop = settingsBackButtonRect.bottom + panelRect.height() * 0.03f;
-        float rowH = (bottom - listTop - (STATE_SLOTS - 1) * panelRect.height() * 0.025f) / STATE_SLOTS;
         float gap = panelRect.height() * 0.025f;
+        // 4 manual slots at full row height + 1 shorter AUTOSAVE row below
+        // them (AUTOSAVE_ROW_WEIGHT of a full row - it only ever needs one
+        // button, LOAD, so it doesn't need the same height as a 3-button
+        // manual slot) - solved as weighted shares of the available space
+        // rather than a fixed extra row, so existing manual-slot sizing
+        // shrinks proportionally instead of the autosave row overflowing
+        // the panel.
+        final float AUTOSAVE_ROW_WEIGHT = 0.62f;
+        float totalGaps = gap * STATE_SLOTS;  // STATE_SLOTS gaps: between each manual slot, plus one before AUTOSAVE
+        float totalWeight = STATE_SLOTS + AUTOSAVE_ROW_WEIGHT;
+        float rowH = (bottom - listTop - totalGaps) / totalWeight;
+        float autosaveRowH = rowH * AUTOSAVE_ROW_WEIGHT;
 
         boolean flashActive = stateSlotFlashIndex >= 0 && System.currentTimeMillis() < stateSlotFlashUntilMs;
         if (!flashActive) stateSlotFlashIndex = -1;
@@ -1864,6 +1921,57 @@ public class MapStatusView extends View {
             PixelFont.drawText(canvas, deleteLabel, deleteBtn.centerX(), deleteBtn.centerY() - labelSize * 0.4f,
                     PixelFont.pixelSizeForHeight(labelSize * 0.72f), deleteColor, Paint.Align.CENTER);
         }
+
+        // AUTOSAVE row - read-only (no SAVE/DELETE, only LOAD; see
+        // autosaveRowRect's own field comment for why there's no SAVE
+        // button here). Slightly shorter than the 4 manual slots
+        // (autosaveRowH) and visually set apart with the accent color
+        // border always on, not just when something's flashing, so it
+        // reads as a distinct "this one's automatic" row rather than a
+        // 5th identical slot.
+        float autosaveRy0 = listTop + STATE_SLOTS * (rowH + gap);
+        RectF autosaveRow = autosaveRowRect;
+        autosaveRow.set(left, autosaveRy0, right, autosaveRy0 + autosaveRowH);
+        drawPixelBox(canvas, autosaveRow, COL_SLOT_BG, COL_ACCENT, COL_BORDER_HIGHLIGHT, false);
+
+        float autosaveThumbW = autosaveRowH * (GameState.THUMB_W / (float) GameState.THUMB_H);
+        RectF autosaveThumbRect = new RectF(autosaveRow.left + autosaveRowH * 0.12f, autosaveRow.top + autosaveRowH * 0.12f,
+                autosaveRow.left + autosaveRowH * 0.12f + autosaveThumbW, autosaveRow.bottom - autosaveRowH * 0.12f);
+        boolean autosaveHasSave = GameState.autosaveExists();
+        if (autosaveThumbnail != null) {
+            canvas.drawBitmap(autosaveThumbnail, null, autosaveThumbRect, mapPaint);
+            statusPaint.setStyle(Paint.Style.STROKE);
+            statusPaint.setColor(COL_BORDER_DARK);
+            statusPaint.setStrokeWidth(autosaveRowH * 0.02f);
+            canvas.drawRect(autosaveThumbRect, statusPaint);
+        } else {
+            statusPaint.setStyle(Paint.Style.FILL);
+            statusPaint.setColor(Color.rgb(22, 24, 34));
+            canvas.drawRect(autosaveThumbRect, statusPaint);
+            String placeholder = autosaveHasSave ? "SAVED" : "EMPTY";
+            PixelFont.drawText(canvas, placeholder, autosaveThumbRect.centerX(), autosaveThumbRect.centerY() - autosaveRowH * 0.05f,
+                    PixelFont.pixelSizeForHeight(autosaveRowH * 0.1f), COL_DIM_GRAY, Paint.Align.CENTER);
+        }
+
+        float autosaveLabelSize = autosaveRowH * 0.22f;
+        PixelFont.drawText(canvas, "AUTOSAVE", autosaveThumbRect.right + autosaveRowH * 0.15f, autosaveRow.top + autosaveRowH * 0.2f,
+                PixelFont.pixelSizeForHeight(autosaveLabelSize), COL_ACCENT, Paint.Align.LEFT);
+
+        boolean autosaveFlashActive = autosaveLoadFlash && System.currentTimeMillis() < autosaveLoadFlashUntilMs;
+        if (!autosaveFlashActive) autosaveLoadFlash = false;
+
+        float autosaveBtnW = right - (autosaveThumbRect.right + autosaveRowH * 0.15f) - autosaveRowH * 0.15f;
+        float autosaveBtnH = autosaveRowH * 0.32f;
+        float autosaveBtnY = autosaveRow.bottom - autosaveRowH * 0.15f - autosaveBtnH;
+        RectF autosaveLoadBtn = autosaveLoadButtonRect;
+        autosaveLoadBtn.set(autosaveThumbRect.right + autosaveRowH * 0.15f, autosaveBtnY,
+                autosaveThumbRect.right + autosaveRowH * 0.15f + autosaveBtnW, autosaveBtnY + autosaveBtnH);
+        drawPixelBox(canvas, autosaveLoadBtn, COL_PANEL_BG,
+                autosaveFlashActive ? COL_ACCENT : autosaveHasSave ? COL_BORDER_DARK : Color.rgb(30, 30, 30), COL_BORDER_HIGHLIGHT, false);
+        String autosaveLoadLabel = autosaveFlashActive ? "LOADED" : "LOAD";
+        int autosaveLoadColor = autosaveFlashActive ? COL_ACCENT : autosaveHasSave ? COL_TAB_LABEL : COL_DIM_GRAY;
+        PixelFont.drawText(canvas, autosaveLoadLabel, autosaveLoadBtn.centerX(), autosaveLoadBtn.centerY() - autosaveLabelSize * 0.4f,
+                PixelFont.pixelSizeForHeight(autosaveLabelSize * 0.8f), autosaveLoadColor, Paint.Align.CENTER);
     }
 
     // Persists a toggle both to the native engine (for the ones that need a

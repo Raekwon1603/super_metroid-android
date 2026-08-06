@@ -791,6 +791,63 @@ void SM2_SetHudHidden(bool hidden) {
 bool SM2_IsAutosaveOnExit(void) { return g_config.autosave; }
 void SM2_SetAutosaveOnExit(bool enabled) { g_config.autosave = enabled; }
 
+// The autosave-on-exit UI in the SAVE STATES panel needs a thumbnail too,
+// same as the 4 manual second-screen slots (SM2_SaveState/
+// SM2_CaptureThumbnail, called together from the Java UI thread right
+// after a successful save) - but there's no equivalent "right after" moment
+// here: the autosave-save itself (HandleCommand(kKeys_Save+0,...) in
+// main.c) happens once, synchronously, on the native thread, in the last
+// few frames before the process exits - by the time control could get back
+// to Java to call GameState.captureStateThumbnail like the manual slots do,
+// the frame that was just saved may already be gone. So this captures and
+// writes the thumbnail to its own small raw file RIGHT HERE, natively, in
+// the same breath as the save itself (see this function's only call site,
+// main.c's shutdown path) - Java reads it back directly as raw pixels
+// (SM2_ReadAutosaveThumbnail) rather than through a PNG decode, since
+// there's no PNG encoder linked into this native build.
+#define kAutosaveThumbW 128
+#define kAutosaveThumbH 112
+void SM2_CaptureAutosaveThumbnail(void) {
+  static uint32 pixels[kAutosaveThumbW * kAutosaveThumbH];
+  if (!SM2_CaptureThumbnail(pixels, kAutosaveThumbW, kAutosaveThumbH)) return;
+  FILE *f = fopen("saves/autosave_thumb.bin", "wb");
+  if (!f) return;
+  fwrite(pixels, sizeof(uint32), kAutosaveThumbW * kAutosaveThumbH, f);
+  fclose(f);
+}
+
+// Raw-pixel counterpart to SM2_CaptureAutosaveThumbnail - out must be
+// kAutosaveThumbW*kAutosaveThumbH (128*112) uint32s, same ARGB8888 layout
+// SM2_CaptureThumbnail itself produces. Returns false if no autosave
+// thumbnail has ever been written (including "autosave has never
+// triggered this install") or the file is a stale/wrong size (e.g. from a
+// build with different thumbnail dimensions).
+bool SM2_ReadAutosaveThumbnail(uint32 *out) {
+  FILE *f = fopen("saves/autosave_thumb.bin", "rb");
+  if (!f) return false;
+  size_t n = fread(out, sizeof(uint32), kAutosaveThumbW * kAutosaveThumbH, f);
+  fclose(f);
+  return n == (size_t)(kAutosaveThumbW * kAutosaveThumbH);
+}
+
+// True if saves/save0.sav exists - the same desktop quicksave slot 0
+// autosave-on-exit writes to (kKeys_Save+0 in main.c), separate from the
+// second screen's own SM2_STATE_SLOT_BASE-offset slots.
+bool SM2_AutosaveExists(void) {
+  FILE *f = fopen("saves/save0.sav", "rb");
+  if (!f) return false;
+  fclose(f);
+  return true;
+}
+
+bool SM2_LoadAutosave(void) {
+  if (!SM2_AutosaveExists()) return false;
+  SM2_LockGameState();
+  RtlSaveLoad(kSaveLoad_Load, 0);
+  SM2_UnlockGameState();
+  return true;
+}
+
 bool SM2_SaveState(int slot) {
   if (slot < 0 || slot >= SM2_STATE_SLOTS) return false;
   SM2_LockGameState();
