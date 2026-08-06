@@ -504,6 +504,21 @@ int main(int argc, char** argv) {
       printf("Failed to open audio device: %s\n", SDL_GetError());
       return 1;
     }
+    // SDL_OpenAudioDevice starts the device UNPAUSED - AudioCallback can
+    // fire on its own thread immediately, before g_audiobuffer/
+    // g_frames_per_block/g_audio_channels below are set. On the callback's
+    // first invocation, g_audiobuffer_cur/_end are both still zero-
+    // initialized globals (== 0, so the "buffer empty, refill" branch always
+    // takes on that first call), so hitting this race means
+    // RtlRenderAudio() runs against a NULL g_audiobuffer with
+    // g_frames_per_block/g_audio_channels still 0 - a narrow but real
+    // window (confirmed on-device: intermittent static that persists until
+    // app restart, matching a bad g_audiobuffer_cur/_end state latched in by
+    // that first corrupted call). Pausing immediately closes the window;
+    // the existing audiopaused/g_paused unpause logic further down the
+    // frame loop (which only unpauses once real gameplay is ready to run)
+    // takes it from here.
+    SDL_PauseAudioDevice(g_audio_device, 1);
     g_audio_channels = 2;
     g_frames_per_block = (534 * have.freq) / 32000;
     g_audiobuffer = (uint8 *)malloc(g_frames_per_block * have.channels * sizeof(int16));
