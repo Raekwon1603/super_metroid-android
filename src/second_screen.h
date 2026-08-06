@@ -245,6 +245,11 @@ bool SM2_SaveState(int slot);
 bool SM2_LoadState(int slot);
 // True if saves/save<100+slot>.sav exists on disk.
 bool SM2_StateSlotExists(int slot);
+// Deletes saves/save<100+slot>.sav. Returns false if the slot index is out
+// of range or the file couldn't be removed (including "didn't exist" -
+// callers that care about that distinction should check
+// SM2_StateSlotExists first).
+bool SM2_DeleteState(int slot);
 
 // Downsamples the most recently rendered main-screen frame (256x224, the
 // same pixels RtlDrawPpuFrame last drew) into a thumbW x thumbH ARGB8888

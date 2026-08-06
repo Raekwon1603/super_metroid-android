@@ -265,6 +265,11 @@ JNIEXPORT jboolean JNICALL JFN(stateSlotExists)(JNIEnv *env, jclass clazz, jint 
   return SM2_StateSlotExists(slot) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL JFN(deleteState)(JNIEnv *env, jclass clazz, jint slot) {
+  (void)env; (void)clazz;
+  return SM2_DeleteState(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
 // 128x112 - matches GameState.java's THUMB_W/THUMB_H (8:7, the SNES's own
 // aspect ratio, so the thumbnail isn't stretched). Static scratch buffer,
 // same reasoning as g_map_px above.

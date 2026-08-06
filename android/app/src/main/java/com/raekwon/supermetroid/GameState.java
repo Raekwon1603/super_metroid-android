@@ -132,6 +132,7 @@ public class GameState {
     public static native boolean saveState(int slot);
     public static native boolean loadState(int slot);
     public static native boolean stateSlotExists(int slot);
+    public static native boolean deleteState(int slot);
     // Downsamples the most recently rendered main-screen frame into a
     // THUMB_W x THUMB_H ARGB8888 buffer (out must be length >=
     // THUMB_W*THUMB_H) - call right after a successful saveState() so the

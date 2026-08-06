@@ -753,6 +753,13 @@ bool SM2_StateSlotExists(int slot) {
   return true;
 }
 
+bool SM2_DeleteState(int slot) {
+  if (slot < 0 || slot >= SM2_STATE_SLOTS) return false;
+  char path[64];
+  snprintf(path, sizeof(path), "saves/save%d.sav", SM2_STATE_SLOT_BASE + slot);
+  return remove(path) == 0;
+}
+
 // ---- Real room background art (not the schematic pause-map tiles above) ----
 //
 // Renders the CURRENT room's actual BG1 tilemap, exactly as the real game

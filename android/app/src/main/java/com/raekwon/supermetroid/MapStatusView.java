@@ -6,12 +6,16 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
+
+import java.io.File;
+import java.io.FileOutputStream;
 
 // The entire second-screen content: a full-screen, live Zebes-area minimap -
 // real SNES map tile graphics decoded from the ROM (SM2_RenderAreaMap in
@@ -46,17 +50,13 @@ public class MapStatusView extends View {
     // void. Higher = fewer tiles visible within that same auto-fit region,
     // each drawn bigger, for zooming in on the room Samus is in; pinch,
     // double-tap-to-reset, or the on-screen +/- buttons all adjust it.
-    // Zooming out past MIN_ZOOM instead flips into worldView (see below).
+    // Pinch or the +/- buttons clamp within [MIN_ZOOM, MAX_ZOOM] - switching
+    // to/from worldView is exclusively roomWorldToggleBtn's job (see its
+    // own ACTION_UP handler), not an implicit zoom side effect.
     private static final float MIN_ZOOM = 1f;
     private static final float MAX_ZOOM = 6f;
     private static final float DEFAULT_ZOOM = MIN_ZOOM;
     private static final float ZOOM_BUTTON_STEP = 1.4f;
-    // The room view's auto-fit floor is MIN_ZOOM, but the zoom-out button
-    // allows one extra step below that (zoomed further out than auto-fit,
-    // shrinking the room within the panel) before crossing over into
-    // worldView - so the button always leaves one more "zoom out" press
-    // available instead of jumping straight to the world map.
-    private static final float ZOOM_OUT_BUTTON_FLOOR = MIN_ZOOM / ZOOM_BUTTON_STEP;
     private float zoomFactor = DEFAULT_ZOOM;
 
     // Same idea as zoomFactor/panOffsetX/Y above but for the WORLD view
@@ -122,7 +122,6 @@ public class MapStatusView extends View {
     private final RectF[] statusStripWeaponRects = { new RectF(), new RectF(), new RectF() };
     private int statusStripTouchPointerId = -1;
     private boolean showStatusOnMap;
-    private boolean crtFilterMain;
     private boolean hideMainHud;
     // hideMainHud is loaded from SharedPreferences in the constructor, before
     // GameState's native library is guaranteed ready to call - applied once,
@@ -130,15 +129,21 @@ public class MapStatusView extends View {
     // isPlayingLive/nativeBroken guard already in place there).
     private boolean hudPrefApplied = false;
     private static final String[] SETTINGS_LABELS = {
-        "STATUS ON MAP", "CRT FILTER", "HIDE MAIN HUD", "SAVE STATES", "REMAP BUTTONS",
+        "STATUS ON MAP", "HIDE MAIN HUD", "SAVE STATES", "CLEAR MAP MARKERS",
     };
     private static final int SETTINGS_ROW_STATUS_ON_MAP = 0;
-    private static final int SETTINGS_ROW_CRT_FILTER = 1;
-    private static final int SETTINGS_ROW_HIDE_HUD = 2;
-    private static final int SETTINGS_ROW_SAVE_STATES = 3;
-    private static final int SETTINGS_ROW_REMAP = 4;
-    private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF(), new RectF() };
+    private static final int SETTINGS_ROW_HIDE_HUD = 1;
+    private static final int SETTINGS_ROW_SAVE_STATES = 2;
+    private static final int SETTINGS_ROW_CLEAR_PINS = 3;
+    private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF() };
     private int settingsTouchDownIndex = -1;
+    // First tap arms the confirmation (row shows "TAP AGAIN") instead of
+    // wiping every pin immediately - clearing is a one-way action with no
+    // undo, same reasoning as any other destructive action deserving a
+    // confirmation step. Second tap within CLEAR_PINS_CONFIRM_MS confirms;
+    // any other row tap, or the window expiring, disarms it silently.
+    private static final long CLEAR_PINS_CONFIRM_MS = 3000;
+    private long clearPinsArmedUntilMs = 0;
 
     // Save States sub-screen (SETTINGS tab's "SAVE STATES" row) - null
     // means the main SETTINGS list is showing; non-null names which
@@ -151,11 +156,20 @@ public class MapStatusView extends View {
     private final RectF[] stateSlotRects = new RectF[STATE_SLOTS];
     private final RectF[] stateSaveButtonRects = new RectF[STATE_SLOTS];
     private final RectF[] stateLoadButtonRects = new RectF[STATE_SLOTS];
+    private final RectF[] stateDeleteButtonRects = new RectF[STATE_SLOTS];
     private int stateSlotTouchDownIndex = -1;
-    private int stateSlotTouchDownButton = -1;  // 0=save, 1=load
-    // Cached per-slot thumbnails - re-decoded from GameState only when a
-    // save just happened (captureStateThumbnail is a real downsample pass
-    // over the last-rendered frame, not free enough to call every onDraw).
+    private int stateSlotTouchDownButton = -1;  // 0=save, 1=load, 2=delete
+    // First DELETE tap arms a confirmation (button shows "SURE?") instead
+    // of deleting immediately - same reasoning/pattern as
+    // clearPinsArmedUntilMs (a save slot is real progress, deleting it is a
+    // one-way action with no undo). -1 = no slot armed. Tapping any OTHER
+    // slot's delete button, or a different button entirely, disarms it
+    // rather than leaving it silently armed for an unrelated later tap to
+    // trigger.
+    private int stateDeleteArmedSlot = -1;
+    // Cached per-slot thumbnails - loaded from an on-disk PNG (see
+    // thumbnailFile) the first time a slot is shown after app launch, then
+    // kept in memory and only re-written (not re-read) after that.
     private final Bitmap[] stateSlotThumbnails = new Bitmap[STATE_SLOTS];
     private final int[] stateThumbPixels = new int[GameState.THUMB_W * GameState.THUMB_H];
     // Flashes a brief confirmation label ("SAVED"/"LOADED") over a slot
@@ -398,6 +412,9 @@ public class MapStatusView extends View {
     // (drawWireframeCallouts) - soft accent, semi-transparent so it doesn't
     // fight the wireframe's own bright green linework.
     private final Paint calloutLinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // Pin pennant fill/outline - reused across every drawn pin per frame,
+    // same pattern as pixelBoxPaint above.
+    private final Paint pinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final int[] missileIconPixels = new int[24 * 16];
     private Bitmap missileIconBitmap;
@@ -488,6 +505,35 @@ public class MapStatusView extends View {
     private final int[] samusTile = new int[2];
     private final int[] samusMapPosFixed = new int[2];
 
+    // ---- map pins ----
+    // Long-press the map (room view or world view) to drop a marker at that
+    // tile ("come back for this later" - a missed item, a locked door,
+    // etc.); long-press an existing pin to remove it. Stored in the same
+    // 64x32 tile space as exploredGrid/samusTile, scoped per-area (pinArea)
+    // so world view can show every pin at once while room view only shows
+    // the current area's own - mirrors how exploredGrid itself is already
+    // split per-area (decodeExploredGridForArea) rather than being one
+    // global grid.
+    private static final int MAX_PINS = 64;
+    private final int[] pinArea = new int[MAX_PINS];
+    private final float[] pinX = new float[MAX_PINS];
+    private final float[] pinY = new float[MAX_PINS];
+    private int pinCount = 0;
+    // Screen-space hit radius for removing a pin via long-press, and the
+    // on-screen marker's own drawn size - both derived from cellW/cellH
+    // (room view) or scale (world view) at long-press time, same idea as
+    // samusDotPaint's radius just below those.
+    private static final float PIN_HIT_RADIUS_CELLS = 1.1f;
+
+    // Cached every drawMap()/drawWorldView() call so a long-press (which
+    // only gets screen coordinates from GestureDetector, not the tile-space
+    // transform drawMap/drawWorldView compute locally) can convert back to
+    // tile space - same reasoning as tilesPerPixelX/Y/worldTilesPerPixelX/Y
+    // just above, which exist for the identical reason (onScroll needs the
+    // inverse transform too).
+    private float mapViewLeft, mapViewTop, mapViewSrcLeft, mapViewSrcTop, mapViewScaleX, mapViewScaleY;
+    private float worldViewOriginX, worldViewOriginY, worldViewScale;
+
     private final int[] mapPixels = new int[MAP_PX_W * MAP_PX_H];
     private final Bitmap mapBitmap;
     private final int[] labelPixels = new int[LABEL_PX_W * LABEL_PX_H];
@@ -555,37 +601,27 @@ public class MapStatusView extends View {
             stateSlotRects[i] = new RectF();
             stateSaveButtonRects[i] = new RectF();
             stateLoadButtonRects[i] = new RectF();
+            stateDeleteButtonRects[i] = new RectF();
         }
 
         scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
+                // Pinching past either end of a view's own zoom range just
+                // clamps there now - switching between room/world view is
+                // the roomWorldToggleBtn's job exclusively (see its own
+                // ACTION_UP handler), not an implicit side effect of
+                // zooming. Previously pinching in on the world view (or out
+                // on the room view) past its range auto-crossed into the
+                // other view, which surprised players who just wanted to
+                // zoom, not switch maps.
                 if (worldView) {
                     float prospective = worldZoomFactor * detector.getScaleFactor();
-                    if (prospective > MAX_WORLD_ZOOM) {
-                        // Zoomed in past the world view's own range - cross
-                        // over into the single-area room view, centered on
-                        // wherever the world view was currently showing
-                        // (Samus's area) rather than resetting world zoom,
-                        // so pinching in feels continuous across the
-                        // transition instead of snapping back out first.
-                        worldView = false;
-                        worldZoomFactor = MIN_WORLD_ZOOM;
-                        worldPanOffsetX = 0f;
-                        worldPanOffsetY = 0f;
-                        zoomFactor = MIN_ZOOM;
-                    } else {
-                        worldZoomFactor = Math.max(MIN_WORLD_ZOOM, prospective);
-                    }
+                    worldZoomFactor = clampFloat(prospective, MIN_WORLD_ZOOM, MAX_WORLD_ZOOM);
                     return true;
                 }
                 float prospective = zoomFactor * detector.getScaleFactor();
-                if (prospective < MIN_ZOOM) {
-                    zoomFactor = MIN_ZOOM;
-                    enterWorldView();
-                } else {
-                    zoomFactor = Math.min(MAX_ZOOM, prospective);
-                }
+                zoomFactor = clampFloat(prospective, MIN_ZOOM, MAX_ZOOM);
                 return true;
             }
         });
@@ -612,6 +648,66 @@ public class MapStatusView extends View {
                     panOffsetY += distanceY * tilesPerPixelY;
                 }
                 return true;
+            }
+
+            @Override
+            public void onLongPress(MotionEvent e) {
+                if (worldView) {
+                    if (worldViewScale <= 0f) return;
+                    // worldViewOriginX/Y/Scale (set in drawWorldView) are
+                    // already in TILE units, not pixel units like
+                    // mapViewSrcLeft/scaleX below - drawWorldView's own
+                    // forward transform is
+                    // px = originX + (l[4] + (localTile - l[0])) * scale,
+                    // so this is that inverted, with no extra /8 (an
+                    // earlier version wrongly copied the room-view path's
+                    // /8, which divides by an 8x-too-large factor since
+                    // there's no separate pixel-per-tile step here - that
+                    // silently pushed every long-press miles outside every
+                    // area's bbox, so no pin could ever be placed in world
+                    // view - confirmed on-device).
+                    float canvasTileX = (e.getX() - worldViewOriginX) / worldViewScale;
+                    float canvasTileY = (e.getY() - worldViewOriginY) / worldViewScale;
+                    // Which area actually owns this canvas point - reuse
+                    // the same declared-bbox membership test drawWorldView
+                    // uses for Samus's own marker, so a pin always lands in
+                    // the area whose art is actually visible under the
+                    // finger. Skips (no-op) for a canvas point that isn't
+                    // inside any drawn area's box, rather than guessing.
+                    for (int area = 0; area < 6; area++) {
+                        if (!worldAreaDrawn[area]) continue;
+                        float[] l = WORLD_AREA_LAYOUT[area];
+                        float localX = canvasTileX - l[4] + l[0];
+                        float localY = canvasTileY - l[5] + l[1];
+                        if (localX >= l[0] && localX < l[2] && localY >= l[1] && localY < l[3]) {
+                            // PIN_HIT_RADIUS_CELLS is already in tile units
+                            // (same space as localX/localY and pinX/pinY -
+                            // see togglePin's own comment), so it's used
+                            // directly, with no conversion. An earlier
+                            // version divided it by worldViewScale (screen-
+                            // pixels-per-tile, a large number), shrinking
+                            // the effective hit radius to a tiny fraction
+                            // of a tile - only a pixel-perfect tap on a
+                            // pin's exact center would register as a
+                            // removal (confirmed on-device: markers were
+                            // "too pixel perfect" to remove).
+                            togglePin(area, localX, localY, PIN_HIT_RADIUS_CELLS);
+                            break;
+                        }
+                    }
+                } else {
+                    if (mapViewScaleX <= 0f || mapViewScaleY <= 0f) return;
+                    float tileX = (mapViewSrcLeft + (e.getX() - mapViewLeft) / mapViewScaleX) / 8f;
+                    float tileY = (mapViewSrcTop + (e.getY() - mapViewTop) / mapViewScaleY) / 8f;
+                    // Same fix as the world-view branch above: tileX/tileY
+                    // and pinX/pinY are already in tile units, so
+                    // PIN_HIT_RADIUS_CELLS needs no conversion here either.
+                    // The previous "* 8f / scale / 8f" was a no-op algebraically
+                    // (the two 8s cancel) that still left the result divided
+                    // by mapViewScaleX/Y - screen-pixels-per-SOURCE-pixel,
+                    // a large number - for the same near-zero-radius bug.
+                    togglePin(cachedArea, tileX, tileY, PIN_HIT_RADIUS_CELLS);
+                }
             }
         });
 
@@ -661,9 +757,74 @@ public class MapStatusView extends View {
 
         SharedPreferences prefs = context.getSharedPreferences("secondscreen", Context.MODE_PRIVATE);
         showStatusOnMap = prefs.getBoolean("showStatusOnMap", false);
-        crtFilterMain = prefs.getBoolean("crtFilterMain", false);
         hideMainHud = prefs.getBoolean("hideMainHud", false);
-        // TODO: GameState.setCrtFilter native method not implemented yet.
+        loadPins(prefs);
+    }
+
+    // Deserializes "area,x,y;area,x,y;..." (x/y stored as tile-space *100,
+    // truncated to an int, so a pin's exact sub-tile position round-trips
+    // without needing float parsing) - written by savePins below. Silently
+    // drops any malformed entry rather than failing the whole load, so one
+    // corrupt entry can't wipe out every other saved pin.
+    private void loadPins(SharedPreferences prefs) {
+        String s = prefs.getString("mapPins", "");
+        pinCount = 0;
+        for (String entry : s.split(";")) {
+            if (entry.isEmpty() || pinCount >= MAX_PINS) continue;
+            String[] parts = entry.split(",");
+            if (parts.length != 3) continue;
+            try {
+                pinArea[pinCount] = Integer.parseInt(parts[0]);
+                pinX[pinCount] = Integer.parseInt(parts[1]) / 100f;
+                pinY[pinCount] = Integer.parseInt(parts[2]) / 100f;
+                pinCount++;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+    }
+
+    private void savePins() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < pinCount; i++) {
+            if (i > 0) sb.append(';');
+            sb.append(pinArea[i]).append(',').append(Math.round(pinX[i] * 100)).append(',').append(Math.round(pinY[i] * 100));
+        }
+        getContext().getSharedPreferences("secondscreen", Context.MODE_PRIVATE)
+                .edit().putString("mapPins", sb.toString()).apply();
+    }
+
+    // Adds a pin at the given area+tile position, or removes the nearest
+    // existing pin in that same area if one is within PIN_HIT_RADIUS_CELLS
+    // (converted to tile units by the caller) - same toggle behavior as
+    // zelda3-android's own map pins (long-press an empty spot to add,
+    // long-press an existing pin to remove).
+    private void togglePin(int area, float tileX, float tileY, float hitRadiusTiles) {
+        int nearest = -1;
+        float nearestDistSq = hitRadiusTiles * hitRadiusTiles;
+        for (int i = 0; i < pinCount; i++) {
+            if (pinArea[i] != area) continue;
+            float dx = pinX[i] - tileX, dy = pinY[i] - tileY;
+            float distSq = dx * dx + dy * dy;
+            if (distSq <= nearestDistSq) {
+                nearestDistSq = distSq;
+                nearest = i;
+            }
+        }
+        if (nearest != -1) {
+            // Swap-remove: order among pins doesn't matter for drawing/
+            // hit-testing, so this avoids an O(n) shift for what's a rare,
+            // user-initiated action anyway.
+            pinCount--;
+            pinArea[nearest] = pinArea[pinCount];
+            pinX[nearest] = pinX[pinCount];
+            pinY[nearest] = pinY[pinCount];
+        } else if (pinCount < MAX_PINS) {
+            pinArea[pinCount] = area;
+            pinX[pinCount] = tileX;
+            pinY[pinCount] = tileY;
+            pinCount++;
+        }
+        savePins();
     }
 
     @Override
@@ -754,6 +915,11 @@ public class MapStatusView extends View {
                         stateSlotTouchDownButton = 1;
                         return true;
                     }
+                    if (stateDeleteButtonRects[i].contains(x, y)) {
+                        stateSlotTouchDownIndex = i;
+                        stateSlotTouchDownButton = 2;
+                        return true;
+                    }
                 }
                 return true;
             } else if (currentTab == Tab.SETTINGS) {
@@ -810,6 +976,7 @@ public class MapStatusView extends View {
             int idx = tabTouchDownIndex;
             if (idx >= 0 && idx < tabButtonRects.length && tabButtonRects[idx].contains(event.getX(), event.getY())) {
                 currentTab = Tab.values()[idx];
+                stateDeleteArmedSlot = -1;
             }
             tabTouchPointerId = -1;
             tabTouchDownIndex = -1;
@@ -842,21 +1009,33 @@ public class MapStatusView extends View {
         } else if (action == MotionEvent.ACTION_UP && settingsBackTouchDownId != -1) {
             if (settingsBackButtonRect.contains(event.getX(), event.getY())) {
                 settingsSubPanel = null;
+                stateDeleteArmedSlot = -1;
             }
             settingsBackTouchDownId = -1;
             return true;
         } else if (action == MotionEvent.ACTION_UP && stateSlotTouchDownIndex != -1) {
             int slot = stateSlotTouchDownIndex, btn = stateSlotTouchDownButton;
-            RectF target = btn == 0 ? stateSaveButtonRects[slot] : stateLoadButtonRects[slot];
+            RectF target = btn == 0 ? stateSaveButtonRects[slot] : btn == 1 ? stateLoadButtonRects[slot] : stateDeleteButtonRects[slot];
             if (target.contains(event.getX(), event.getY())) {
                 if (btn == 0) {
                     if (GameState.saveState(slot)) {
                         captureAndCacheThumbnail(slot);
                         flashSlotMessage(slot, "SAVED");
                     }
+                    stateDeleteArmedSlot = -1;
+                } else if (btn == 1) {
+                    if (GameState.stateSlotExists(slot)) {
+                        if (GameState.loadState(slot)) {
+                            flashSlotMessage(slot, "LOADED");
+                        }
+                    }
+                    stateDeleteArmedSlot = -1;
                 } else if (GameState.stateSlotExists(slot)) {
-                    if (GameState.loadState(slot)) {
-                        flashSlotMessage(slot, "LOADED");
+                    if (stateDeleteArmedSlot == slot) {
+                        deleteStateSlot(slot);
+                        stateDeleteArmedSlot = -1;
+                    } else {
+                        stateDeleteArmedSlot = slot;
                     }
                 }
             }
@@ -892,31 +1071,19 @@ public class MapStatusView extends View {
         } else if (action == MotionEvent.ACTION_UP && zoomButtonPointerId != -1) {
             RectF btn = zoomButtonIsIn ? zoomInBtn : zoomOutBtn;
             if (btn.contains(event.getX(), event.getY())) {
+                // Same clamp-don't-switch behavior as onScale above - the
+                // +/- buttons stay within whichever view is currently
+                // showing; roomWorldToggleBtn is the only way to switch.
                 if (zoomButtonIsIn) {
                     if (worldView) {
-                        float prospective = worldZoomFactor * ZOOM_BUTTON_STEP;
-                        if (prospective > MAX_WORLD_ZOOM) {
-                            worldView = false;
-                            worldZoomFactor = MIN_WORLD_ZOOM;
-                            worldPanOffsetX = 0f;
-                            worldPanOffsetY = 0f;
-                            zoomFactor = MIN_ZOOM;
-                        } else {
-                            worldZoomFactor = prospective;
-                        }
+                        worldZoomFactor = Math.min(MAX_WORLD_ZOOM, worldZoomFactor * ZOOM_BUTTON_STEP);
                     } else {
                         zoomFactor = Math.min(MAX_ZOOM, zoomFactor * ZOOM_BUTTON_STEP);
                     }
                 } else if (worldView) {
                     worldZoomFactor = Math.max(MIN_WORLD_ZOOM, worldZoomFactor / ZOOM_BUTTON_STEP);
                 } else {
-                    float prospective = zoomFactor / ZOOM_BUTTON_STEP;
-                    if (prospective < ZOOM_OUT_BUTTON_FLOOR) {
-                        zoomFactor = ZOOM_OUT_BUTTON_FLOOR;
-                        enterWorldView();
-                    } else {
-                        zoomFactor = prospective;
-                    }
+                    zoomFactor = Math.max(MIN_ZOOM, zoomFactor / ZOOM_BUTTON_STEP);
                 }
             }
             zoomButtonPointerId = -1;
@@ -1550,12 +1717,16 @@ public class MapStatusView extends View {
 
             String value;
             if (i == SETTINGS_ROW_STATUS_ON_MAP) value = showStatusOnMap ? "ON" : "OFF";
-            else if (i == SETTINGS_ROW_CRT_FILTER) value = crtFilterMain ? "ON" : "OFF";
             else if (i == SETTINGS_ROW_HIDE_HUD) value = hideMainHud ? "ON" : "OFF";
-            else value = null;  // SAVE STATES / REMAP BUTTONS open a sub-screen, no ON/OFF value
+            else if (i == SETTINGS_ROW_CLEAR_PINS) value = (System.currentTimeMillis() < clearPinsArmedUntilMs) ? "TAP AGAIN" : null;
+            else value = null;  // SAVE STATES opens a sub-screen, no ON/OFF value
 
-            if (value != null) {
-                int valueColor = "ON".equals(value) ? COL_ACCENT : COL_DIM_GRAY;
+            if (i == SETTINGS_ROW_CLEAR_PINS && value == null) {
+                // Resting state has no chevron (it's not a sub-screen) and
+                // no ON/OFF value - just a plain action row.
+            } else if (value != null) {
+                int valueColor = i == SETTINGS_ROW_CLEAR_PINS ? Color.rgb(235, 110, 90)
+                        : "ON".equals(value) ? COL_ACCENT : COL_DIM_GRAY;
                 PixelFont.drawText(canvas, value, row.right - rowH * 0.3f - PixelFont.measureWidth(value, PixelFont.pixelSizeForHeight(textSize)),
                         row.centerY() - textSize / 2f, PixelFont.pixelSizeForHeight(textSize), valueColor, Paint.Align.LEFT);
             } else {
@@ -1571,27 +1742,70 @@ public class MapStatusView extends View {
         }
     }
 
-    // Re-decodes every existing slot's on-disk thumbnail into a Bitmap -
-    // called once when entering the sub-panel (stateSlotExists/
-    // captureStateThumbnail aren't cheap enough to call every onDraw) and
-    // again after any save/load that could have changed what's on disk.
-    // There's no separate thumbnail file - GameState.captureStateThumbnail
-    // only ever reflects the CURRENTLY RUNNING frame, so a slot that exists
-    // on disk but wasn't just saved/loaded this session has no thumbnail
-    // available and just shows a plain placeholder instead (see
-    // drawSaveStatesPanel's own null check).
+    // GameState.captureStateThumbnail only ever reflects the CURRENTLY
+    // RUNNING frame (there's no native API to render an arbitrary saved
+    // slot's state without actually loading it), so a slot saved in an
+    // EARLIER app session has no way to regenerate its thumbnail this
+    // session - it's written to its own small PNG right after a successful
+    // save (see captureAndCacheThumbnail) so it can be read back later
+    // instead. Lives next to the native side's own saves/save<N>.sav in the
+    // same app-external-storage folder (getExternalFilesDir(null)/saves/ -
+    // matches SDL_AndroidGetExternalStoragePath(), see android_impl.c's own
+    // comment on why those two resolve to the same directory).
+    private File thumbnailFile(int slot) {
+        return new File(getContext().getExternalFilesDir(null), "saves/thumb" + slot + ".png");
+    }
+
+    // Loads whichever slots aren't already in the in-memory cache from
+    // their on-disk PNG (see thumbnailFile) - called once when entering the
+    // sub-panel, not every onDraw, since decoding a PNG isn't free. A slot
+    // with no save file at all, or no thumbnail PNG yet (e.g. saved before
+    // this feature existed), falls back to the plain "SAVED"/"EMPTY" text
+    // placeholder (see drawSaveStatesPanel's own null check) rather than
+    // erroring.
     private void refreshStateSlotThumbnails() {
         for (int i = 0; i < STATE_SLOTS; i++) {
-            if (!GameState.stateSlotExists(i)) stateSlotThumbnails[i] = null;
+            if (!GameState.stateSlotExists(i)) {
+                stateSlotThumbnails[i] = null;
+                continue;
+            }
+            if (stateSlotThumbnails[i] != null) continue;  // already cached this session
+            File f = thumbnailFile(i);
+            if (f.exists()) {
+                Bitmap loaded = android.graphics.BitmapFactory.decodeFile(f.getPath());
+                if (loaded != null) stateSlotThumbnails[i] = loaded;
+            }
         }
     }
 
     private void captureAndCacheThumbnail(int slot) {
         if (!GameState.captureStateThumbnail(stateThumbPixels, GameState.THUMB_W, GameState.THUMB_H)) return;
-        if (stateSlotThumbnails[slot] == null) {
+        if (stateSlotThumbnails[slot] == null || stateSlotThumbnails[slot].isRecycled()) {
             stateSlotThumbnails[slot] = Bitmap.createBitmap(GameState.THUMB_W, GameState.THUMB_H, Bitmap.Config.ARGB_8888);
         }
         stateSlotThumbnails[slot].setPixels(stateThumbPixels, 0, GameState.THUMB_W, 0, 0, GameState.THUMB_W, GameState.THUMB_H);
+
+        File f = thumbnailFile(slot);
+        File parent = f.getParentFile();
+        if (parent != null) parent.mkdirs();
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            stateSlotThumbnails[slot].compress(Bitmap.CompressFormat.PNG, 100, out);
+        } catch (java.io.IOException ignored) {
+            // Thumbnail is a nice-to-have, not the save itself (the actual
+            // .sav write already succeeded by the time this runs) - a
+            // failed write here just means the placeholder shows again
+            // next launch, not a lost save.
+        }
+    }
+
+    // Deletes both the save file and its thumbnail PNG - called from the
+    // DELETE button in drawSaveStatesPanel after its own tap-to-arm
+    // confirmation (see stateDeleteArmedSlot's field comment).
+    private void deleteStateSlot(int slot) {
+        GameState.deleteState(slot);
+        File f = thumbnailFile(slot);
+        if (f.exists()) f.delete();
+        stateSlotThumbnails[slot] = null;
     }
 
     private void flashSlotMessage(int slot, String text) {
@@ -1648,28 +1862,51 @@ public class MapStatusView extends View {
             PixelFont.drawText(canvas, "SLOT " + (i + 1), thumbRect.right + rowH * 0.15f, row.top + rowH * 0.2f,
                     PixelFont.pixelSizeForHeight(labelSize), COL_TAB_LABEL, Paint.Align.LEFT);
 
-            if (flashActive && stateSlotFlashIndex == i) {
-                PixelFont.drawText(canvas, stateSlotFlashText, thumbRect.right + rowH * 0.15f, row.top + rowH * 0.48f,
-                        PixelFont.pixelSizeForHeight(labelSize), COL_ACCENT, Paint.Align.LEFT);
-            }
+            boolean flashingThisSlot = flashActive && stateSlotFlashIndex == i;
 
-            float btnW = (right - (thumbRect.right + rowH * 0.15f) - rowH * 0.15f) / 2f - rowH * 0.1f;
+            // 3 equal buttons (SAVE/LOAD/DELETE) instead of the previous 2
+            // (SAVE/LOAD), same gap convention between them.
+            float btnGap = rowH * 0.1f;
+            float btnW = (right - (thumbRect.right + rowH * 0.15f) - btnGap * 2) / 3f;
             float btnH = rowH * 0.32f;
             float btnY = row.bottom - rowH * 0.15f - btnH;
             float btnX0 = thumbRect.right + rowH * 0.15f;
 
+            // SAVED/LOADED replaces the SAVE/LOAD button's own label in
+            // place (same convention as DELETE's own "SURE?" swap below)
+            // instead of floating as separate text next to the slot label -
+            // it's immediate feedback on the button that was just pressed,
+            // so it reads more clearly anchored to that exact button.
+            boolean showSavedFlash = flashingThisSlot && "SAVED".equals(stateSlotFlashText);
+            boolean showLoadedFlash = flashingThisSlot && "LOADED".equals(stateSlotFlashText);
+
             RectF saveBtn = stateSaveButtonRects[i];
             saveBtn.set(btnX0, btnY, btnX0 + btnW, btnY + btnH);
-            drawPixelBox(canvas, saveBtn, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
-            PixelFont.drawText(canvas, "SAVE", saveBtn.centerX(), saveBtn.centerY() - labelSize * 0.4f,
-                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), COL_TAB_LABEL, Paint.Align.CENTER);
+            drawPixelBox(canvas, saveBtn, COL_PANEL_BG, showSavedFlash ? COL_ACCENT : COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+            PixelFont.drawText(canvas, showSavedFlash ? "SAVED" : "SAVE", saveBtn.centerX(), saveBtn.centerY() - labelSize * 0.4f,
+                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), showSavedFlash ? COL_ACCENT : COL_TAB_LABEL, Paint.Align.CENTER);
 
             RectF loadBtn = stateLoadButtonRects[i];
             boolean canLoad = GameState.stateSlotExists(i);
-            loadBtn.set(btnX0 + btnW + rowH * 0.1f, btnY, btnX0 + btnW * 2 + rowH * 0.1f, btnY + btnH);
-            drawPixelBox(canvas, loadBtn, COL_PANEL_BG, canLoad ? COL_BORDER_DARK : Color.rgb(30, 30, 30), COL_BORDER_HIGHLIGHT, false);
-            PixelFont.drawText(canvas, "LOAD", loadBtn.centerX(), loadBtn.centerY() - labelSize * 0.4f,
-                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), canLoad ? COL_TAB_LABEL : COL_DIM_GRAY, Paint.Align.CENTER);
+            loadBtn.set(btnX0 + btnW + btnGap, btnY, btnX0 + btnW * 2 + btnGap, btnY + btnH);
+            drawPixelBox(canvas, loadBtn, COL_PANEL_BG, showLoadedFlash ? COL_ACCENT : canLoad ? COL_BORDER_DARK : Color.rgb(30, 30, 30), COL_BORDER_HIGHLIGHT, false);
+            PixelFont.drawText(canvas, showLoadedFlash ? "LOADED" : "LOAD", loadBtn.centerX(), loadBtn.centerY() - labelSize * 0.4f,
+                    PixelFont.pixelSizeForHeight(labelSize * 0.8f), showLoadedFlash ? COL_ACCENT : canLoad ? COL_TAB_LABEL : COL_DIM_GRAY, Paint.Align.CENTER);
+
+            // DELETE only makes sense for a slot that actually has a save -
+            // dimmed/inert the same way LOAD is for an empty slot. First
+            // tap arms a confirmation (shows "SURE?" in place of "DELETE"
+            // for this slot only) rather than deleting immediately - see
+            // stateDeleteArmedSlot's own field comment.
+            RectF deleteBtn = stateDeleteButtonRects[i];
+            deleteBtn.set(btnX0 + btnW * 2 + btnGap * 2, btnY, btnX0 + btnW * 3 + btnGap * 2, btnY + btnH);
+            boolean armed = stateDeleteArmedSlot == i;
+            int deleteBorder = !canLoad ? Color.rgb(30, 30, 30) : armed ? Color.rgb(235, 110, 90) : COL_BORDER_DARK;
+            drawPixelBox(canvas, deleteBtn, COL_PANEL_BG, deleteBorder, COL_BORDER_HIGHLIGHT, false);
+            String deleteLabel = armed ? "SURE?" : "DELETE";
+            int deleteColor = !canLoad ? COL_DIM_GRAY : armed ? Color.rgb(235, 110, 90) : COL_TAB_LABEL;
+            PixelFont.drawText(canvas, deleteLabel, deleteBtn.centerX(), deleteBtn.centerY() - labelSize * 0.4f,
+                    PixelFont.pixelSizeForHeight(labelSize * 0.72f), deleteColor, Paint.Align.CENTER);
         }
     }
 
@@ -1681,10 +1918,6 @@ public class MapStatusView extends View {
         if (index == SETTINGS_ROW_STATUS_ON_MAP) {
             showStatusOnMap = !showStatusOnMap;
             editor.putBoolean("showStatusOnMap", showStatusOnMap);
-        } else if (index == SETTINGS_ROW_CRT_FILTER) {
-            crtFilterMain = !crtFilterMain;
-            // TODO: GameState.setCrtFilter native method not implemented yet.
-            editor.putBoolean("crtFilterMain", crtFilterMain);
         } else if (index == SETTINGS_ROW_HIDE_HUD) {
             hideMainHud = !hideMainHud;
             GameState.setHudHidden(hideMainHud);
@@ -1693,10 +1926,20 @@ public class MapStatusView extends View {
             settingsSubPanel = SettingsSubPanel.SAVE_STATES;
             refreshStateSlotThumbnails();
             return;
-        } else if (index == SETTINGS_ROW_REMAP) {
-            // TODO: open Remap Buttons sub-screen
+        } else if (index == SETTINGS_ROW_CLEAR_PINS) {
+            if (System.currentTimeMillis() < clearPinsArmedUntilMs) {
+                pinCount = 0;
+                savePins();
+                clearPinsArmedUntilMs = 0;
+            } else {
+                clearPinsArmedUntilMs = System.currentTimeMillis() + CLEAR_PINS_CONFIRM_MS;
+            }
             return;
         }
+        // Any other row tap disarms a pending clear-pins confirmation,
+        // rather than leaving it armed to be accidentally confirmed by an
+        // unrelated later tap on that row.
+        clearPinsArmedUntilMs = 0;
         editor.apply();
     }
 
@@ -1791,6 +2034,14 @@ public class MapStatusView extends View {
         // by (see tilesPerPixelX/Y's field comment).
         tilesPerPixelX = 1f / cellW;
         tilesPerPixelY = 1f / cellH;
+        // Cache the screen<->tile transform for onLongPress (see
+        // mapViewLeft's own field comment - GestureDetector only hands it
+        // screen coordinates, not this method's local viewport math).
+        mapViewLeft = left; mapViewTop = top;
+        mapViewSrcLeft = srcLeft; mapViewSrcTop = srcTop;
+        mapViewScaleX = scaleX; mapViewScaleY = scaleY;
+
+        drawPins(canvas, area, left, top, srcLeft, srcTop, scaleX, scaleY, cellW, cellH);
 
         if (samusOnGrid) {
             float cx = left + (samusSmoothX * 8 - srcLeft) * scaleX;
@@ -1801,6 +2052,52 @@ public class MapStatusView extends View {
         }
 
         if (haveLabel) drawAreaLabel(canvas, left, top, right, area);
+    }
+
+    // Draws every pin belonging to `area` at its screen position - shared
+    // by drawMap (single area, pixel-space srcLeft/srcTop + per-8px-tile
+    // scaleX/Y) and drawWorldView (whole composite canvas, a single
+    // uniform `scale` and no srcLeft/srcTop cropping) via the two different
+    // callers below.
+    private void drawPins(Canvas canvas, int area, float left, float top, float srcLeft, float srcTop,
+                           float scaleX, float scaleY, float cellW, float cellH) {
+        for (int i = 0; i < pinCount; i++) {
+            if (pinArea[i] != area) continue;
+            float px = left + (pinX[i] * 8 - srcLeft) * scaleX;
+            float py = top + (pinY[i] * 8 - srcTop) * scaleY;
+            drawPinMarker(canvas, px, py, Math.min(cellW, cellH));
+        }
+    }
+
+    // Pole base is anchored at (cx, cy) - the actual pinned tile position -
+    // with the flag hanging above/right of it, same visual convention as a
+    // map-pin icon (the marker's "point" is its true location, not its
+    // visual center).
+    private void drawPinMarker(Canvas canvas, float cx, float cy, float cellSize) {
+        float poleH = cellSize * 1.8f;
+        float flagW = cellSize * 1.3f, flagH = cellSize * 0.9f;
+
+        pinPaint.setStyle(Paint.Style.STROKE);
+        pinPaint.setColor(Color.BLACK);
+        pinPaint.setStrokeWidth(Math.max(2f, cellSize * 0.18f));
+        canvas.drawLine(cx, cy, cx, cy - poleH, pinPaint);
+
+        Path flag = new Path();
+        flag.moveTo(cx, cy - poleH);
+        flag.lineTo(cx + flagW, cy - poleH + flagH * 0.35f);
+        flag.lineTo(cx, cy - poleH + flagH);
+        flag.close();
+
+        pinPaint.setStyle(Paint.Style.FILL);
+        pinPaint.setColor(COL_ACCENT);
+        canvas.drawPath(flag, pinPaint);
+        pinPaint.setStyle(Paint.Style.STROKE);
+        pinPaint.setStrokeWidth(Math.max(1.5f, cellSize * 0.1f));
+        pinPaint.setColor(Color.BLACK);
+        canvas.drawPath(flag, pinPaint);
+
+        pinPaint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(cx, cy, Math.max(2f, cellSize * 0.14f), pinPaint);
     }
 
     // Recomputes exploredMinX/Y/MaxX/Y (half-open) from exploredGrid. Falls
@@ -2192,6 +2489,9 @@ public class MapStatusView extends View {
         // by (see worldTilesPerPixelX/Y's field comment).
         worldTilesPerPixelX = 1f / scale;
         worldTilesPerPixelY = 1f / scale;
+        // Cache the screen<->canvas-tile transform for onLongPress (see
+        // worldViewOriginX's own field comment).
+        worldViewOriginX = originX; worldViewOriginY = originY; worldViewScale = scale;
 
         Rect src = new Rect(0, 0, WORLD_CANVAS_PX_W, WORLD_CANVAS_PX_H);
         Rect dest = new Rect((int) originX, (int) originY,
@@ -2234,6 +2534,14 @@ public class MapStatusView extends View {
                 canvas.drawCircle(mx, my, radius, samusDotPaint);
                 canvas.drawCircle(mx, my, radius, samusRingPaint);
             }
+        }
+
+        for (int i = 0; i < pinCount; i++) {
+            if (!worldAreaDrawn[pinArea[i]]) continue;
+            float[] l = WORLD_AREA_LAYOUT[pinArea[i]];
+            float px = originX + (l[4] + (pinX[i] - l[0])) * scale;
+            float py = originY + (l[5] + (pinY[i] - l[1])) * scale;
+            drawPinMarker(canvas, px, py, scale);
         }
     }
 
