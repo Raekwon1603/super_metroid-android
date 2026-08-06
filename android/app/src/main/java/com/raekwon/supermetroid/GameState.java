@@ -89,6 +89,14 @@ public class GameState {
     public static native int getCollectedBeams();
     public static native int getEquippedBeams();
 
+    // Real in-game timer - out[0]=hours, out[1]=minutes, out[2]=seconds,
+    // same fields the ending screen's own HH:MM:SS display reads.
+    public static native boolean getPlaytime(int[] out);
+    // Real vanilla item-percentage formula (the same number shown on the
+    // ending screen's "ITEMS COLLECTED" line). Returns -1 if the ROM isn't
+    // loaded yet.
+    public static native int getItemPercent();
+
     public static native int getHealth();
     public static native int getMaxHealth();
     public static native int getReserveHealth();
@@ -124,6 +132,12 @@ public class GameState {
     // readout) - SETTINGS tab's "HIDE MAIN HUD" toggle.
     public static native boolean isHudHidden();
     public static native void setHudHidden(boolean hidden);
+
+    // Autosave (quicksave on exit, auto-load on next launch) - takes effect
+    // at the NEXT app close/launch, not immediately (see
+    // SM2_SetAutosaveOnExit's own comment in second_screen.c).
+    public static native boolean isAutosaveOnExit();
+    public static native void setAutosaveOnExit(boolean enabled);
 
     // Save States - SETTINGS tab's "SAVE STATES" sub-screen. 4 slots
     // (0-3), stored separately from the desktop's own F1-F10 quicksave

@@ -6,6 +6,7 @@
 #include "funcs.h"
 #include "redux_suit_data.h"
 #include "sm_cpu_infra.h"
+#include "config.h"
 #ifdef __ANDROID__
 #include <android/log.h>
 #endif
@@ -614,6 +615,57 @@ int SM2_GetEquippedItems(void) { return equipped_items; }
 int SM2_GetCollectedBeams(void) { return collected_beams; }
 int SM2_GetEquippedBeams(void) { return equipped_beams; }
 
+// Real in-game timer (g_ram+0x9DA/0x9DC/0x9DE/0x9E0 - the same fields the
+// ending screen's own HH:MM:SS display reads, see sm_8b.c's ending-time
+// digit rendering). Plain RAM reads, no ROM/lock dependency, same category
+// as SM2_GetHealth etc. above.
+void SM2_GetPlaytime(int *out_hours, int *out_minutes, int *out_seconds) {
+  *out_hours = game_time_hours;
+  *out_minutes = game_time_minutes;
+  *out_seconds = game_time_seconds;
+}
+
+// Real vanilla item-percentage formula, extracted from CalcItemPercentageCount
+// (sm_8b.c:5214, ROM 0x8BE627 - the actual routine that computes the digits
+// drawn on the ending screen's "ITEMS COLLECTED xx%" line). Reimplemented
+// here as a pure numeric read rather than reusing that function directly,
+// since CalcItemPercentageCount's own job is writing pre-rendered tile
+// indices into ram3000.pause_menu_map_tilemap (the ending-screen VRAM
+// buffer) as a side effect - there's no clean way to get just the number
+// out of it without either duplicating this same logic or fighting its
+// tilemap writes, and the latter would corrupt real ending-screen state if
+// ever called outside that cutscene. Deliberately NOT Redux's own item%
+// display (Equipment-Percentage-Display.asm) - Redux replaces this with a
+// different, variable-tank-value counter/formula that only applies to
+// Redux-hacked ROMs; vanilla SM (and this decomp, which targets vanilla)
+// counts tank RAM values against fixed ROM-table divisors plus item/beam
+// bitfield membership, exactly as below.
+bool SM2_GetItemPercent(int *out_percent) {
+  if (!g_rom) return false;
+  uint16 total = 0;
+  // 5 tank types (Energy Tanks, Missiles, Supers, Power Bombs, Reserve
+  // Tanks) - g_off_8BE70D is a ROM table of their live-RAM addresses
+  // (values < 0x2000, e.g. max_missiles), g_word_8BE717 the matching
+  // "how many of that tank type make up 1%" ROM table - same two tables
+  // and same SnesDivide-based summation CalcItemPercentageCount performs.
+  const uint16 *tank_ram_addrs = (const uint16 *)RomFixedPtr(0x8be70d);
+  const uint16 *tank_divisors = (const uint16 *)RomFixedPtr(0x8be717);
+  for (int i = 4; i >= 0; i--) {
+    const uint16 *ram_val = (const uint16 *)RomPtr_RAM(tank_ram_addrs[i]);
+    total += SnesDivide(*ram_val, (uint8)tank_divisors[i]);
+  }
+  const uint16 *item_masks = (const uint16 *)RomFixedPtr(0x8be721);
+  for (int i = 0; i < 11; i++) {
+    if (item_masks[i] & collected_items) total++;
+  }
+  const uint16 *beam_masks = (const uint16 *)RomFixedPtr(0x8be737);
+  for (int i = 0; i < 5; i++) {
+    if (beam_masks[i] & collected_beams) total++;
+  }
+  *out_percent = total;
+  return true;
+}
+
 int SM2_GetHealth(void) { return samus_health; }
 int SM2_GetMaxHealth(void) { return samus_max_health; }
 int SM2_GetReserveHealth(void) { return samus_reserve_health; }
@@ -726,6 +778,18 @@ void SM2_SetHudHidden(bool hidden) {
     g_snes->ppu->vram[(0x5800 + w) & 0x7fff] = 0x2c0f;
   }
 }
+
+// ---- autosave on exit ----
+// g_config.autosave is only ever CHECKED at the two fixed points main()
+// itself runs once (autosave-load right after startup, autosave-save right
+// before shutdown - see main.c) - unlike SM2_SetHudHidden's live-effect
+// pattern above, there's nothing to apply immediately here, this just
+// flips the same flag those two fixed checks already read, so a toggle now
+// takes effect at the NEXT app close, not this instant. sm.ini's own
+// Autosave key sets the same field as this function's initial value - this
+// is a live override of that starting point, not a separate setting.
+bool SM2_IsAutosaveOnExit(void) { return g_config.autosave; }
+void SM2_SetAutosaveOnExit(bool enabled) { g_config.autosave = enabled; }
 
 bool SM2_SaveState(int slot) {
   if (slot < 0 || slot >= SM2_STATE_SLOTS) return false;

@@ -123,19 +123,27 @@ public class MapStatusView extends View {
     private int statusStripTouchPointerId = -1;
     private boolean showStatusOnMap;
     private boolean hideMainHud;
-    // hideMainHud is loaded from SharedPreferences in the constructor, before
-    // GameState's native library is guaranteed ready to call - applied once,
-    // lazily, on the first successful onDraw pass instead (same as the
-    // isPlayingLive/nativeBroken guard already in place there).
+    // -1 = no stored preference yet (defer to sm.ini's own Autosave default,
+    // read from native on first apply), 0 = off, 1 = on - see the
+    // constructor's own comment on why this can't just be a plain boolean
+    // with a hardcoded Java-side default like hideMainHud above.
+    private int autosavePrefState;
+    private boolean autosaveOnExit;
+    // hideMainHud/autosavePrefState are loaded from SharedPreferences in the
+    // constructor, before GameState's native library is guaranteed ready to
+    // call - applied once, lazily, on the first successful onDraw pass
+    // instead (same as the isPlayingLive/nativeBroken guard already in
+    // place there).
     private boolean hudPrefApplied = false;
     private static final String[] SETTINGS_LABELS = {
-        "STATUS ON MAP", "HIDE MAIN HUD", "SAVE STATES", "CLEAR MAP MARKERS",
+        "STATUS ON MAP", "HIDE MAIN HUD", "SAVE STATES", "CLEAR MAP MARKERS", "AUTOSAVE ON EXIT",
     };
     private static final int SETTINGS_ROW_STATUS_ON_MAP = 0;
     private static final int SETTINGS_ROW_HIDE_HUD = 1;
     private static final int SETTINGS_ROW_SAVE_STATES = 2;
     private static final int SETTINGS_ROW_CLEAR_PINS = 3;
-    private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF() };
+    private static final int SETTINGS_ROW_AUTOSAVE = 4;
+    private final RectF[] settingsRowRects = { new RectF(), new RectF(), new RectF(), new RectF(), new RectF() };
     private int settingsTouchDownIndex = -1;
     // First tap arms the confirmation (row shows "TAP AGAIN") instead of
     // wiping every pin immediately - clearing is a one-way action with no
@@ -378,15 +386,14 @@ public class MapStatusView extends View {
 
     // The 3 footer tabs: MAP (the existing live minimap), EQUIPMENT (a
     // pause-menu-style grid of every collected item/beam, real ROM icons
-    // via GameState.renderItemIcon/renderBeamIcon), AMMO (tap Missile/
-    // Super/Power Bomb to actually select it - writes hud_item_index via
-    // GameState.setSelectedAmmo, same real effect as pressing Select on
-    // the controller). Content area swaps per-tab; the tab bar itself is
-    // always drawn last/on top, pinned to the bottom, same as
-    // tmc-android's PaintTabBar-always-last-every-frame approach.
-    private enum Tab { MAP, EQUIPMENT, AMMO, SETTINGS }
+    // via GameState.renderItemIcon/renderBeamIcon, PLUS the real pause
+    // screen's own ITEMS%/TIME boxes - see drawEquipmentTab), SETTINGS.
+    // Content area swaps per-tab; the tab bar itself is always drawn
+    // last/on top, pinned to the bottom, same as tmc-android's
+    // PaintTabBar-always-last-every-frame approach.
+    private enum Tab { MAP, EQUIPMENT, SETTINGS }
     private Tab currentTab = Tab.MAP;
-    private final RectF[] tabButtonRects = { new RectF(), new RectF(), new RectF(), new RectF() };
+    private final RectF[] tabButtonRects = { new RectF(), new RectF(), new RectF() };
     private int tabTouchPointerId = -1;
     private int tabTouchDownIndex = -1;
 
@@ -478,13 +485,12 @@ public class MapStatusView extends View {
     // just shows them via the HUD icon strip, not the SAMUS equipment
     // page) - omitted here to match, not an oversight.
 
-    // ---- Ammo-select tab ----
+    // Tap-to-arm ammo slots (used by the STATUS ON MAP strip - see
+    // drawStatusStrip) - GameState.AMMO_* constants in the order the strip
+    // displays them.
     private static final int[] AMMO_SLOTS = {
             GameState.AMMO_MISSILES, GameState.AMMO_SUPER_MISSILES, GameState.AMMO_POWER_BOMBS,
     };
-    private static final String[] AMMO_LABELS = { "MISSILE", "SUPER", "POWER BOMB" };
-    private final RectF[] ammoSlotRects = { new RectF(), new RectF(), new RectF() };
-    private int ammoTouchPointerId = -1;
 
     private final RectF zoomInBtn = new RectF();
     private final RectF zoomOutBtn = new RectF();
@@ -758,6 +764,13 @@ public class MapStatusView extends View {
         SharedPreferences prefs = context.getSharedPreferences("secondscreen", Context.MODE_PRIVATE);
         showStatusOnMap = prefs.getBoolean("showStatusOnMap", false);
         hideMainHud = prefs.getBoolean("hideMainHud", false);
+        // No stored default (unlike showStatusOnMap/hideMainHud above) -
+        // -1/0/1 tri-state read in onDraw's own lazy-apply block instead,
+        // since sm.ini already has its own default (Autosave=0) read at
+        // native startup; a hardcoded Java-side default here would silently
+        // override a user's own sm.ini edit the very first time this runs,
+        // before they've ever touched this toggle.
+        autosavePrefState = prefs.contains("autosaveOnExit") ? (prefs.getBoolean("autosaveOnExit", false) ? 1 : 0) : -1;
         loadPins(prefs);
     }
 
@@ -890,15 +903,6 @@ public class MapStatusView extends View {
                 }
             }
 
-            if (currentTab == Tab.AMMO) {
-                for (int i = 0; i < ammoSlotRects.length; i++) {
-                    if (ammoSlotRects[i].contains(x, y)) {
-                        ammoTouchPointerId = event.getPointerId(0);
-                        return true;
-                    }
-                }
-            }
-
             if (currentTab == Tab.SETTINGS && settingsSubPanel == SettingsSubPanel.SAVE_STATES) {
                 if (settingsBackButtonRect.contains(x, y)) {
                     settingsBackTouchDownId = event.getPointerId(0);
@@ -980,31 +984,6 @@ public class MapStatusView extends View {
             }
             tabTouchPointerId = -1;
             tabTouchDownIndex = -1;
-            return true;
-        } else if (action == MotionEvent.ACTION_UP && ammoTouchPointerId != -1) {
-            float x = event.getX(), y = event.getY();
-            int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
-            int currentlySelected = GameState.getSelectedAmmo();
-            for (int i = 0; i < ammoSlotRects.length; i++) {
-                if (ammoSlotRects[i].contains(x, y)) {
-                    // Only a collected (max > 0) ammo type can actually be
-                    // armed - mirrors the real Select-button handler
-                    // (SwitchToHudHandler_* in sm_90.c), which skips over
-                    // unowned slots rather than letting them be selected.
-                    // Tapping the ALREADY-selected slot instead deselects it
-                    // (back to AMMO_NONE/plain beam) - on real hardware,
-                    // undoing a Select-button arm means cycling Select
-                    // through every other slot until you land back on
-                    // "none"; a direct second tap here is a much faster
-                    // shortcut to the same end state, not a new game rule.
-                    if (maxCounts[i] > 0) {
-                        boolean alreadySelected = currentlySelected == AMMO_SLOTS[i];
-                        GameState.setSelectedAmmo(alreadySelected ? GameState.AMMO_NONE : AMMO_SLOTS[i]);
-                    }
-                    break;
-                }
-            }
-            ammoTouchPointerId = -1;
             return true;
         } else if (action == MotionEvent.ACTION_UP && settingsBackTouchDownId != -1) {
             if (settingsBackButtonRect.contains(event.getX(), event.getY())) {
@@ -1092,7 +1071,6 @@ public class MapStatusView extends View {
             zoomButtonPointerId = -1;
             tabTouchPointerId = -1;
             tabTouchDownIndex = -1;
-            ammoTouchPointerId = -1;
             roomWorldToggleBtnPointerId = -1;
             statusStripTouchPointerId = -1;
             settingsTouchDownIndex = -1;
@@ -1118,6 +1096,17 @@ public class MapStatusView extends View {
             try {
                 if (!hudPrefApplied) {
                     GameState.setHudHidden(hideMainHud);
+                    if (autosavePrefState == -1) {
+                        // No stored preference yet - read sm.ini's own
+                        // startup default from native instead of guessing,
+                        // so the SETTINGS row's displayed ON/OFF state
+                        // matches reality on a fresh install (see the
+                        // constructor's own comment).
+                        autosaveOnExit = GameState.isAutosaveOnExit();
+                    } else {
+                        autosaveOnExit = autosavePrefState == 1;
+                        GameState.setAutosaveOnExit(autosaveOnExit);
+                    }
                     hudPrefApplied = true;
                 }
                 drawPixelBox(canvas, panelRect, COL_PANEL_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
@@ -1192,9 +1181,6 @@ public class MapStatusView extends View {
                     case EQUIPMENT:
                         drawEquipmentTab(canvas);
                         break;
-                    case AMMO:
-                        drawAmmoTab(canvas);
-                        break;
                     case SETTINGS:
                         drawSettingsTab(canvas);
                         break;
@@ -1225,7 +1211,7 @@ public class MapStatusView extends View {
         if (isAttachedToWindow()) postInvalidateOnAnimation();
     }
 
-    private static final String[] TAB_LABELS = { "MAP", "ITEMS", "AMMO", "SETUP" };
+    private static final String[] TAB_LABELS = { "MAP", "ITEMS", "SETUP" };
 
     // Persistent footer tab bar, always drawn last/on top so it reads as
     // chrome rather than page content - same "content swaps, chrome
@@ -1295,23 +1281,61 @@ public class MapStatusView extends View {
         float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
         float colGap = pad * 0.8f;
 
+        // Real pause screen's own top-left/top-right boxes (see reference
+        // screenshot: "ITEMS 100.0%" above the SUIT/MISC column, "TIME
+        // 02:17:52" above the BOOTS/BEAM column) - a header row reserved
+        // above the equipment columns, same width split as those columns
+        // below it so everything lines up into one consistent 2-column
+        // layout.
+        float headerH = (bottom - top) * 0.14f;
+        float colW = (right - left - colGap * 2 - Math.min((right - left) * 0.26f,
+                (bottom - top - headerH) * (WIREFRAME_PX_W / (float) WIREFRAME_PX_H))) / 2f;
+        drawStatBox(canvas, left, top, colW, headerH, "ITEMS",
+                GameState.getItemPercent() >= 0 ? String.format(java.util.Locale.US, "%d.0%%", GameState.getItemPercent()) : "--.-%");
+        int[] playtime = new int[3];
+        String timeText = GameState.getPlaytime(playtime)
+                ? String.format(java.util.Locale.US, "%02d:%02d:%02d", playtime[0], playtime[1], playtime[2])
+                : "--:--:--";
+        drawStatBox(canvas, left + colW + colGap + Math.min((right - left) * 0.26f,
+                (bottom - top - headerH) * (WIREFRAME_PX_W / (float) WIREFRAME_PX_H)) + colGap,
+                top, colW, headerH, "TIME", timeText);
+
+        float bodyTop = top + headerH + pad * 0.6f;
+        float bodyH = bottom - bodyTop;
+
         // 3 columns: SUIT/MISC. boxes | wireframe body | BOOTS/BEAM boxes -
         // mirrors the real pause screen's layout (side boxes flanking the
         // green wireframe Samus). The wireframe's own native aspect ratio
         // (64x136, roughly 1:2.1) sizes its column; the two box columns
         // split whatever width remains.
         float wireframeAspect = WIREFRAME_PX_W / (float) WIREFRAME_PX_H;
-        float wireframeW = Math.min((right - left) * 0.26f, (bottom - top) * wireframeAspect);
-        float colW = (right - left - colGap * 2 - wireframeW) / 2f;
+        float wireframeW = Math.min((right - left) * 0.26f, bodyH * wireframeAspect);
+        float bodyColW = (right - left - colGap * 2 - wireframeW) / 2f;
 
-        RectF[] leftBoxes = drawEquipColumn(canvas, left, top, colW, bottom - top, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
-        RectF wireframeDest = drawWireframe(canvas, left + colW + colGap, top, wireframeW, bottom - top);
-        RectF[] rightBoxes = drawEquipColumn(canvas, left + colW + colGap + wireframeW + colGap, top, colW, bottom - top,
+        RectF[] leftBoxes = drawEquipColumn(canvas, left, bodyTop, bodyColW, bodyH, new EquipGroup[] { EQUIP_SUIT, EQUIP_MISC });
+        RectF wireframeDest = drawWireframe(canvas, left + bodyColW + colGap, bodyTop, wireframeW, bodyH);
+        RectF[] rightBoxes = drawEquipColumn(canvas, left + bodyColW + colGap + wireframeW + colGap, bodyTop, bodyColW, bodyH,
                 new EquipGroup[] { EQUIP_BOOTS, EQUIP_BEAM });
 
         // leftBoxes = {SUIT, MISC}, rightBoxes = {BOOTS, BEAM} - matches the
         // group arrays passed into drawEquipColumn just above.
         drawWireframeCallouts(canvas, wireframeDest, leftBoxes[0], leftBoxes[1], rightBoxes[0], rightBoxes[1]);
+    }
+
+    // A single stat box (label above value, e.g. "ITEMS" / "100.0%") in the
+    // same drawPixelBox style as the SUIT/BOOTS groups below it - matches
+    // the real pause screen's ITEMS%/TIME boxes exactly (see reference
+    // screenshot: plain bordered box, small caption label, larger bold
+    // value beneath).
+    private void drawStatBox(Canvas canvas, float x, float top, float w, float h, String label, String value) {
+        RectF box = new RectF(x, top, x + w, top + h);
+        drawPixelBox(canvas, box, COL_SLOT_BG, COL_BORDER_DARK, COL_BORDER_HIGHLIGHT, false);
+        float labelSize = h * 0.22f;
+        PixelFont.drawText(canvas, label, box.left + w * 0.08f, box.top + h * 0.12f,
+                PixelFont.pixelSizeForHeight(labelSize), COL_DIM_GRAY, Paint.Align.LEFT);
+        float valueSize = h * 0.36f;
+        PixelFont.drawText(canvas, value, box.left + w * 0.08f, box.bottom - h * 0.14f - valueSize,
+                PixelFont.pixelSizeForHeight(valueSize), Color.WHITE, Paint.Align.LEFT);
     }
 
     // Draws Samus's equipment-screen body graphic, centered in the given
@@ -1460,71 +1484,6 @@ public class MapStatusView extends View {
         return cachedFillAccentPaint;
     }
 
-    // Weapon-select screen: tap Missile/Super Missile/Power Bomb to make
-    // it the actively-armed ammo (GameState.setSelectedAmmo writes
-    // hud_item_index directly - the same real effect as pressing Select on
-    // the controller until that slot is reached). The currently-armed slot
-    // is highlighted; slots with zero ammo capacity (not yet collected)
-    // are dimmed and not selectable, matching the real Select-button
-    // behavior of skipping unowned ammo types.
-    private void drawAmmoTab(Canvas canvas) {
-        float pad = panelRect.width() * 0.04f;
-        float top = panelRect.top + pad, bottom = panelRect.bottom - pad;
-        float left = panelRect.left + pad, right = panelRect.right - pad;
-        float gap = pad * 0.6f;
-        float slotW = (right - left - gap * 2) / 3f;
-
-        int[] counts = { GameState.getMissiles(), GameState.getSuperMissiles(), GameState.getPowerBombs() };
-        int[] maxCounts = { GameState.getMaxMissiles(), GameState.getMaxSuperMissiles(), GameState.getMaxPowerBombs() };
-        int selected = GameState.getSelectedAmmo();
-
-        if (!haveMissileIcon && GameState.renderMissileIcon(missileIconPixels)) {
-            missileIconBitmap.setPixels(missileIconPixels, 0, 24, 0, 0, 24, 16);
-            haveMissileIcon = true;
-        }
-        if (!haveSuperMissileIcon && GameState.renderSuperMissileIcon(superMissileIconPixels)) {
-            superMissileIconBitmap.setPixels(superMissileIconPixels, 0, 16, 0, 0, 16, 16);
-            haveSuperMissileIcon = true;
-        }
-        if (!havePowerBombIcon && GameState.renderPowerBombIcon(powerBombIconPixels)) {
-            powerBombIconBitmap.setPixels(powerBombIconPixels, 0, 16, 0, 0, 16, 16);
-            havePowerBombIcon = true;
-        }
-        Bitmap[] icons = { missileIconBitmap, superMissileIconBitmap, powerBombIconBitmap };
-        boolean[] haveIcon = { haveMissileIcon, haveSuperMissileIcon, havePowerBombIcon };
-        float[] iconAspect = { 24f / 16f, 1f, 1f };  // missile icon is 24x16, supers/PBs are 16x16
-
-        for (int i = 0; i < 3; i++) {
-            float sx0 = left + i * (slotW + gap);
-            RectF slot = new RectF(sx0, top, sx0 + slotW, bottom);
-            ammoSlotRects[i].set(slot);
-
-            boolean owned = maxCounts[i] > 0;
-            boolean isSelected = owned && selected == AMMO_SLOTS[i];
-            int borderColor = isSelected ? COL_ACCENT : COL_BORDER_DARK;
-            int fillColor = owned ? COL_SLOT_BG : Color.rgb(22, 24, 34);
-            drawPixelBox(canvas, slot, fillColor, borderColor, COL_BORDER_HIGHLIGHT, false);
-
-            if (haveIcon[i]) {
-                float iconH = slot.height() * 0.3f, iconW = iconH * iconAspect[i];
-                float iconLeft = slot.centerX() - iconW / 2f, iconTop = slot.top + slot.height() * 0.16f;
-                RectF dest = new RectF(iconLeft, iconTop, iconLeft + iconW, iconTop + iconH);
-                if (!owned) mapPaint.setAlpha(70);
-                canvas.drawBitmap(icons[i], null, dest, mapPaint);
-                if (!owned) mapPaint.setAlpha(255);
-            }
-
-            int labelColor = owned ? COL_TAB_LABEL : COL_DIM_GRAY;
-            PixelFont.drawText(canvas, AMMO_LABELS[i], slot.centerX(), slot.top + slot.height() * 0.58f,
-                    PixelFont.pixelSizeForHeight(slot.width() * 0.12f), labelColor, Paint.Align.CENTER);
-
-            String countText = counts[i] + "/" + maxCounts[i];
-            int countColor = owned ? Color.WHITE : COL_DIM_GRAY;
-            PixelFont.drawText(canvas, countText, slot.centerX(), slot.bottom - slot.height() * 0.12f - slot.width() * 0.14f,
-                    PixelFont.pixelSizeForHeight(slot.width() * 0.14f), countColor, Paint.Align.CENTER);
-        }
-    }
-
     // How many pip rows the energy-tank display needs right now: 1 normally,
     // 2 once tank count exceeds a single row (PIPS_PER_ROW) - mirrors the
     // real HUD's own two-row wrap.
@@ -1543,11 +1502,7 @@ public class MapStatusView extends View {
     }
 
     // Health + ammo readout along the top of the MAP tab's panel - the
-    // "STATUS ON MAP" toggle in SETTINGS. Reuses the same icon bitmaps/
-    // pixel buffers drawAmmoTab lazy-loads (rendered once from the real ROM
-    // HUD graphics, cached thereafter), so this costs nothing extra the
-    // AMMO tab wasn't already paying for once both have been
-    // visited. Weapon icons are tap-to-arm, same as the AMMO tab's slots -
+    // "STATUS ON MAP" toggle in SETTINGS. Weapon icons are tap-to-arm -
     // statusStripWeaponRects records where each one last drew so
     // onTouchEvent can hit-test them.
     private void drawStatusStrip(Canvas canvas, float left, float top, float right, float bottom, int bgColor) {
@@ -1685,8 +1640,8 @@ public class MapStatusView extends View {
         }
     }
 
-    // Vertical list of toggle/action rows, styled like drawAmmoTab's slots
-    // but stacked instead of side-by-side - a scroll isn't needed yet since
+    // Vertical list of toggle/action rows, styled like drawPixelBox's
+    // bordered slots but stacked instead of side-by-side - a scroll isn't needed yet since
     // this project's settings list is short enough to fit one screen (see
     // zelda3-android's MinimapView.drawSettingsPanel for the reference
     // version this is scoped down from - most of its rows are Zelda-
@@ -1718,6 +1673,7 @@ public class MapStatusView extends View {
             String value;
             if (i == SETTINGS_ROW_STATUS_ON_MAP) value = showStatusOnMap ? "ON" : "OFF";
             else if (i == SETTINGS_ROW_HIDE_HUD) value = hideMainHud ? "ON" : "OFF";
+            else if (i == SETTINGS_ROW_AUTOSAVE) value = autosaveOnExit ? "ON" : "OFF";
             else if (i == SETTINGS_ROW_CLEAR_PINS) value = (System.currentTimeMillis() < clearPinsArmedUntilMs) ? "TAP AGAIN" : null;
             else value = null;  // SAVE STATES opens a sub-screen, no ON/OFF value
 
@@ -1922,6 +1878,11 @@ public class MapStatusView extends View {
             hideMainHud = !hideMainHud;
             GameState.setHudHidden(hideMainHud);
             editor.putBoolean("hideMainHud", hideMainHud);
+        } else if (index == SETTINGS_ROW_AUTOSAVE) {
+            autosaveOnExit = !autosaveOnExit;
+            autosavePrefState = autosaveOnExit ? 1 : 0;
+            GameState.setAutosaveOnExit(autosaveOnExit);
+            editor.putBoolean("autosaveOnExit", autosaveOnExit);
         } else if (index == SETTINGS_ROW_SAVE_STATES) {
             settingsSubPanel = SettingsSubPanel.SAVE_STATES;
             refreshStateSlotThumbnails();

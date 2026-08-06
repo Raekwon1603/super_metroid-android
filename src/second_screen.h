@@ -183,6 +183,17 @@ enum {
 int SM2_GetCollectedBeams(void);
 int SM2_GetEquippedBeams(void);
 
+// ---- playtime / completion ----
+// Real in-game timer, same fields the ending screen's own HH:MM:SS display
+// reads (g_ram+0x9DA/0x9DC/0x9DE/0x9E0).
+void SM2_GetPlaytime(int *out_hours, int *out_minutes, int *out_seconds);
+// Real vanilla item-percentage formula (see CalcItemPercentageCount in
+// sm_8b.c) - the same number shown on the ending screen's "ITEMS COLLECTED"
+// line. Returns false (leaving out_percent untouched) if the ROM isn't
+// loaded yet, same convention as the other ROM-dependent SM2_Render*
+// functions.
+bool SM2_GetItemPercent(int *out_percent);
+
 // ---- health / ammo ----
 int SM2_GetHealth(void);
 int SM2_GetMaxHealth(void);
@@ -229,6 +240,15 @@ void SM2_CycleSelectedAmmo(int direction);
 // rather than caching it.
 bool SM2_IsHudHidden(void);
 void SM2_SetHudHidden(bool hidden);
+
+// ---- autosave on exit ----
+// Whether the game auto-saves (quicksave slot 0) on exit and auto-loads it
+// on next launch - the same g_config.autosave sm.ini's own Autosave key
+// sets, just live-overridable from the second screen. Takes effect at the
+// NEXT app close/launch, not immediately (see SM2_SetAutosaveOnExit's own
+// comment in second_screen.c for why).
+bool SM2_IsAutosaveOnExit(void);
+void SM2_SetAutosaveOnExit(bool enabled);
 
 // ---- save states ----
 // Slots 0-3 (SM2_STATE_SLOTS), separate from the desktop F1-F10 quicksave

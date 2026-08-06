@@ -146,6 +146,21 @@ JNIEXPORT jint JNICALL JFN(getEquippedBeams)(JNIEnv *env, jclass clazz) {
   return SM2_GetEquippedBeams();
 }
 
+JNIEXPORT jboolean JNICALL JFN(getPlaytime)(JNIEnv *env, jclass clazz, jintArray out) {
+  (void)clazz;
+  if (!out || (*env)->GetArrayLength(env, out) < 3) return JNI_FALSE;
+  int tmp[3];
+  SM2_GetPlaytime(&tmp[0], &tmp[1], &tmp[2]);
+  (*env)->SetIntArrayRegion(env, out, 0, 3, (jint *)tmp);
+  return JNI_TRUE;
+}
+
+JNIEXPORT jint JNICALL JFN(getItemPercent)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  int percent;
+  return SM2_GetItemPercent(&percent) ? percent : -1;
+}
+
 JNIEXPORT jint JNICALL JFN(getHealth)(JNIEnv *env, jclass clazz) {
   (void)env; (void)clazz;
   return SM2_GetHealth();
@@ -248,6 +263,16 @@ JNIEXPORT void JNICALL JFN(setHudHidden)(JNIEnv *env, jclass clazz, jboolean hid
   SM2_LockGameState();
   SM2_SetHudHidden(hidden == JNI_TRUE);
   SM2_UnlockGameState();
+}
+
+JNIEXPORT jboolean JNICALL JFN(isAutosaveOnExit)(JNIEnv *env, jclass clazz) {
+  (void)env; (void)clazz;
+  return SM2_IsAutosaveOnExit() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL JFN(setAutosaveOnExit)(JNIEnv *env, jclass clazz, jboolean enabled) {
+  (void)env; (void)clazz;
+  SM2_SetAutosaveOnExit(enabled == JNI_TRUE);
 }
 
 JNIEXPORT jboolean JNICALL JFN(saveState)(JNIEnv *env, jclass clazz, jint slot) {
