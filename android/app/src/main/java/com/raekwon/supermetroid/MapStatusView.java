@@ -1521,13 +1521,19 @@ public class MapStatusView extends View {
         return maxTanks > PIPS_PER_ROW ? 2 : 1;
     }
 
-    // Total rows the strip needs - just the pip row(s). Weapon icons/health
-    // number sit BESIDE the pips (to the right), not on their own row below,
-    // per on-device layout feedback - so this no longer adds an extra row
-    // for them. Called both to size the reserved strip area (onDraw) and to
-    // lay out its contents (drawStatusStrip).
+    // The strip's own reserved height/icon-and-text sizing - always sized as
+    // if 2 pip rows were present (max value statusStripPipRowCount() can
+    // return), regardless of how many tanks are actually collected. Early
+    // game (few or no tanks) used to reserve only 1 row here, which made
+    // every size derived from it (icons, digits, pip size - see
+    // drawStatusStrip) shrink to about half real size - confusingly small
+    // compared to a fuller save. statusStripPipRowCount() itself is
+    // unchanged and still used directly inside drawStatusStrip to lay out
+    // the actual pip block (1 row centered vs 2 rows stacked), so a 1-tank
+    // save still shows exactly one correctly-sized row of pips, just
+    // centered within the same constant-height strip a 14-tank save gets.
     private int statusStripRowCount() {
-        return statusStripPipRowCount();
+        return 2;
     }
 
     // Health + ammo readout along the top of the MAP tab's panel - the
