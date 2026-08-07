@@ -27,24 +27,49 @@ This follows the same idea as [samyost1/zelda3-android](https://github.com/samyo
 dual-screen mod for `snesrev/zelda3`, adapted for Super Metroid's own map and
 item system.
 
-| Main screen | Second screen: world map |
+| Main screen | Main screen, HUD hidden |
 |---|---|
-| ![Main gameplay screen](docs/screenshots/main-gameplay.png) | ![Second screen world map](docs/screenshots/second-screen-map.png) |
+| ![Main gameplay screen](docs/screenshots/main-gameplay.png) | ![Main gameplay screen with the HUD toggled off](docs/screenshots/main-gameplay-hud-hidden.png) |
 
-| Second screen: single room | Second screen: Map Station reveal |
+The main screen's HUD (health/ammo readout, top-left) can be toggled off
+entirely from the second screen's Setup tab, for a cleaner view of pure
+gameplay - everything it shows is already on the second screen's own live
+HP/ammo strip (see below). Compare the two shots above: same room, HUD on
+the left, hidden on the right.
+
+| Second screen: HP + ammo on the map | Second screen: single room, with a marker |
 |---|---|
-| ![Second screen room view](docs/screenshots/second-screen-map-room.png) | ![Second screen Map Station reveal](docs/screenshots/second-screen-map-station.png) |
+| ![Second screen HP and ammo readout, highlighted, on the Map tab](docs/screenshots/second-screen-hp-ammo.png) | ![Second screen room view with a map marker placed](docs/screenshots/second-screen-map-room.png) |
 
-The Map Station screenshot (right, above) shows Crateria rendered dimmer
+The left screenshot's highlighted box shows the live HP/missile/super
+missile/power bomb strip that sits along the top of the Map tab at all
+times - tap an ammo icon there to arm it, same as the old dedicated Ammo
+tab used to work. The room-view screenshot (right, above) also shows a
+placed map marker - the orange flag next to Samus's position dot. See
+[Map markers](#map-markers) below.
+
+| Second screen: Map Station reveal |
+|---|
+| ![Second screen Map Station reveal](docs/screenshots/second-screen-map-station.png) |
+
+The Map Station screenshot above shows Crateria rendered dimmer
 than Brinstar below it: Crateria's Map Station has been collected, so its
 whole layout is shown even into rooms never actually visited, while
 Brinstar (no Map Station yet) only shows the handful of rooms actually
 walked through, at full brightness. See
 [Map Station reveal](#map-station-reveal) below.
 
-| Second screen: items | Second screen: ammo |
-|---|---|
-| ![Second screen items tab](docs/screenshots/second-screen-items.png) | ![Second screen ammo tab](docs/screenshots/second-screen-ammo.png) |
+| Second screen: items |
+|---|
+| ![Second screen items tab](docs/screenshots/second-screen-items.png) |
+
+The Items tab's screenshot shows `ITEMS 4.0%` in the top-left box - this is
+the same "items collected" percentage the real game itself shows on the
+end-of-game stats screen, computed the same way vanilla Super Metroid
+computes it (a weighted mix of how full your Energy/Missile/Super/Power
+Bomb/Reserve tanks are plus whether you have each other item and beam, not
+just a raw item count), just shown live during play instead of only at the
+end.
 
 The underlying decompile is still an early-stage project, and its C game
 logic remains in this codebase (used on desktop/Switch builds, and always
@@ -114,7 +139,12 @@ On a device with a second physical display (e.g. the AYN Thor), the second
 screen shows automatically once you're in-game, with three tabs along the
 bottom:
 
-**Map** tab. The real in-game pause-menu map tiles, decoded straight from
+**Map** tab. A live HP/missile/super missile/power bomb readout sits in a
+strip along the top at all times (see screenshot above) - tap a missile,
+super missile, or power bomb icon there to arm it, the same effect as
+pressing Select on the controller until you reach it; tap the already-armed
+one again to disarm it back to your plain beam. Below that strip are the
+real in-game pause-menu map tiles, decoded straight from
 your ROM, not a hand-drawn placeholder. Pinch, or use the +/- buttons, to
 zoom from a single room out to the full connected world map, and pan around
 with a drag. The nested-squares button jumps straight between the two ends
@@ -158,28 +188,37 @@ Gravity). Credit to that hack's artists for the original graphics; if you
 maintain that project and would rather this not be included, open an issue
 and I'll take it out.
 
-**Ammo** tab. Tap a missile, super missile, or power bomb slot to arm it,
-the same effect as pressing Select on the controller until you reach it.
-Tap the already-armed slot again to disarm it back to your plain beam.
+**Setup** tab. Toggles and options for everything else the second screen
+does, top to bottom:
+
+![Second screen Setup tab](docs/screenshots/second-screen-setup.png)
+
+- **Status on map**: shows/hides the Map tab's HP/ammo strip described
+  above.
+- **Hide main HUD**: hides the *main* screen's own HUD (health/ammo
+  readout) entirely, for a cleaner view of pure gameplay - everything it
+  shows is already available on the second screen regardless. See the
+  side-by-side comparison near the top of this README.
+- **Save states**: opens a dedicated save-state section alongside the
+  normal in-game saves, with five slots - four manual slots plus an
+  always-current "AUTOSAVE" slot that's kept up to date automatically as
+  you play - each shown with a real screenshot thumbnail of the moment it
+  was saved. Save/load/delete confirmations show inline in the same box
+  rather than as a separate popup. Slots persist across closing and
+  reopening the app.
+
+  ![Second screen Save States section](docs/screenshots/second-screen-save-states.png)
+- **Clear map markers**: removes every marker you've long-pressed onto the
+  map at once (see [Map markers](#map-markers) below for how to place
+  them).
+- **Autosave on exit**: whether closing the app updates the AUTOSAVE slot
+  above with your current progress.
 
 #### Map markers
 Long-press anywhere on the map (room view or world view) to drop a
 Metroid-themed flag marker at that spot - useful for flagging an item you
 saw but couldn't reach yet, a locked door, or anywhere else you want to
-find again later. A "Clear map markers" option removes them all at once.
-
-#### Save states
-A dedicated save-state section alongside the normal in-game saves, with
-five slots: four manual slots plus an always-current "AUTOSAVE" slot that's
-kept up to date automatically as you play, each shown with a real
-screenshot thumbnail of the moment it was saved. Save/load/delete
-confirmations show inline in the same box rather than as a separate
-popup. Slots persist across closing and reopening the app.
-
-#### Hide HUD
-A toggle to hide the main screen's HUD (health/ammo readout) entirely, for
-a cleaner view of pure gameplay - everything you'd normally check there is
-already available on the second screen.
+find again later. Remove them all via Setup's "Clear map markers".
 
 ### Controls
 
