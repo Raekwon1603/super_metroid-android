@@ -6,6 +6,9 @@ the second panel shows a live map, your equipment, and your ammo, so you
 don't have to pause and dig through menus to check where you are or what
 you're carrying.
 
+You need your own legally-dumped `Super Metroid (Japan, USA) (En,Ja)` ROM to
+run this - see [Legal](#legal) below.
+
 This is built on top of [snesrev/sm](https://github.com/snesrev/sm), a C
 decompilation of Super Metroid, which bundles both a from-scratch
 reimplementation of the game's logic in C *and* a byte-accurate 65816 CPU +
@@ -159,6 +162,25 @@ and I'll take it out.
 the same effect as pressing Select on the controller until you reach it.
 Tap the already-armed slot again to disarm it back to your plain beam.
 
+#### Map markers
+Long-press anywhere on the map (room view or world view) to drop a
+Metroid-themed flag marker at that spot - useful for flagging an item you
+saw but couldn't reach yet, a locked door, or anywhere else you want to
+find again later. A "Clear map markers" option removes them all at once.
+
+#### Save states
+A dedicated save-state section alongside the normal in-game saves, with
+five slots: four manual slots plus an always-current "AUTOSAVE" slot that's
+kept up to date automatically as you play, each shown with a real
+screenshot thumbnail of the moment it was saved. Save/load/delete
+confirmations show inline in the same box rather than as a separate
+popup. Slots persist across closing and reopening the app.
+
+#### Hide HUD
+A toggle to hide the main screen's HUD (health/ammo readout) entirely, for
+a cleaner view of pure gameplay - everything you'd normally check there is
+already available on the second screen.
+
 ### Controls
 
 Gamepad input works out of the box. On the Thor specifically:
@@ -186,6 +208,30 @@ quicksave keys aren't reachable from a gamepad-only device.
   above) - `AutoRun` in `sm.ini` has no effect right now. Vanilla
   hold-to-run behavior is what you get. Re-adding it needs an
   emulator/input-layer equivalent instead of a decompile-side hook.
+
+### Known issues
+
+- **Occasional black screen on launch (Thor).** Sometimes the game appears
+  to launch to a black screen and never shows anything, usually right after
+  switching away from another game in Cocoon (the Thor's game-library
+  shell) and launching Super Metroid again shortly after. Closing and
+  relaunching the app fixes it every time. Investigated in depth: the app
+  itself is not frozen or crashed in this state - a debug build confirmed
+  gameplay is running normally frame by frame the entire time, and
+  Cocoon's own logs (`GameStateTracker`) show it simultaneously losing
+  track of which app should be in the foreground, sometimes settling on a
+  completely different game as the one that should be visible. Android's
+  compositor then shows that other app's window (or nothing) instead of
+  Super Metroid's, even though Super Metroid keeps running underneath. This
+  is a bug in Cocoon's own foreground-tracking, not in this app - there's
+  no code path here that controls which window Android chooses to display
+  on top. Workaround: just close and relaunch.
+- **Rapid-fire beam-shot sound effect**: firing the uncharged beam rapidly
+  plays a sound only on the first shot; every following shot in the same
+  burst is silent until a charged shot is fired. Extensively investigated
+  (see the tracked issue for the full writeup) - several real, minor
+  emulation-accuracy bugs were found and fixed along the way, but none of
+  them were the actual cause, and the root cause remains open.
 
 ## Desktop / Switch
 
