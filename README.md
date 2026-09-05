@@ -1,5 +1,13 @@
 # Super Metroid Android SNES emulator (with dual-screen support)
 
+This is the old version of my Super Metroid dual-screen mod. I’ve moved development to a new project that uses a different approach and is the one you should use going forward.
+
+→ Go to the new version: https://github.com/Raekwon1603/RetroArch
+
+The new version keeps the dual-screen features from this project and adds improvements that weren’t possible here. If you’re looking for the latest build, new features, or a more stable experience, that’s where you want to be.
+
+This repository is still available for reference, but I’m no longer actively developing this version.
+
 An Android SNES emulator for Super Metroid, with a second-screen mod for
 dual-display handhelds like the AYN Thor. While you play on the main screen,
 the second panel shows a live map, your equipment, and your ammo, so you
