@@ -1,12 +1,21 @@
 # Super Metroid Android SNES emulator (with dual-screen support)
 
-This is the old version of my Super Metroid dual-screen mod. I’ve moved development to a new project that uses a different approach and is the one you should use going forward.
+## ⚠️ This project has moved ⚠️
 
-→ Go to the new version: https://github.com/Raekwon1603/RetroArch
+**I'm no longer developing this repo. Go here instead:**
 
-The new version keeps the dual-screen features from this project and adds improvements that weren’t possible here. If you’re looking for the latest build, new features, or a more stable experience, that’s where you want to be.
+### 👉 [Raekwon1603/RetroArch](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen) (branch `metroidarch-dual-screen`) 👈
 
-This repository is still available for reference, but I’m no longer actively developing this version.
+It's a dual-screen fork of RetroArch itself, not a custom emulator core. It
+runs on RetroArch and bsnes-hd, so it doesn't have the crashes and emulation
+bugs that come with a homegrown SNES core (see [Known issues](#known-issues)
+below), and it adds real widescreen rendering too, which this repo never
+had.
+
+This repo is staying up and the old build still works, but it's not where
+I'm putting any more work in.
+
+---
 
 An Android SNES emulator for Super Metroid, with a second-screen mod for
 dual-display handhelds like the AYN Thor. While you play on the main screen,
@@ -279,6 +288,11 @@ quicksave keys aren't reachable from a gamepad-only device.
   (see the tracked issue for the full writeup) - several real, minor
   emulation-accuracy bugs were found and fixed along the way, but none of
   them were the actual cause, and the root cause remains open.
+
+Neither of these is being worked on here, see the notice at the top of this
+README. The [RetroArch fork](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen)
+doesn't use this project's own emulator core, so it isn't affected by either
+issue above.
 
 ## Desktop / Switch
 
